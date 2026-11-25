@@ -14,6 +14,10 @@ func main() {
 	mux.HandleFunc("GET /health", handlers.HandleHealthCheck)
 	mux.HandleFunc("POST /api/upload", handlers.HandleUpload)
 
+	for i := 1; i <= 5; i++ {
+		go handlers.ImageProcessorWorker(i, handlers.ImageJobQueue)
+	}
+
 	log.Println("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", mux); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
