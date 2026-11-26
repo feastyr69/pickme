@@ -2,16 +2,16 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strings"
+
+	"github.com/feastyr69/pickme/server/internal/services"
 )
 
-type ImageJob struct {
-	TempPath string
-	GroupID  string
+type UploadHandler struct {
+	WorkerPool *services.WorkerPool
 }
 
 const maxUploadSize = 10 << 20 // 10 MB
@@ -22,15 +22,7 @@ var allowedFileTypes = map[string]bool{
 	"image/webp": true,
 }
 
-var ImageJobQueue = make(chan ImageJob, 100) //channel to hold jobs
-
-func ImageProcessorWorker(id int, jobs <-chan ImageJob) {
-	for job := range jobs {
-		fmt.Printf("[Worker %d] Processing image at %s for group %s\n", id, job.TempPath, job.GroupID)
-	}
-}
-
-func HandleUpload(w http.ResponseWriter, r *http.Request) {
+func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	//error control
 
@@ -81,15 +73,23 @@ func HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("Received file upload request")
 
-	ImageJobQueue <- ImageJob{
+	job := services.ImageJob{
 		TempPath: "/tmp/uploaded_file.jpg",
-		GroupID:  r.FormValue("group_id"),
+		GroupID:  groupID,
+		FileType: detectedType,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
-		"message": "File uploaded successfully",
-	})
+	select {
+	case h.WorkerPool.JobQueue <- job:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "ok",
+			"message": "File uploaded successfully",
+		})
+	default:
+		http.Error(w, "Server is busy. Please try again later.", http.StatusServiceUnavailable)
+		return
+	}
+
 }
