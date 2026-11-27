@@ -1,14 +1,14 @@
 package middleware
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
+	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
-	"time"
+
+	"github.com/MicahParks/keyfunc/v3"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // BrowserCORS permits the configured frontend origin to call the API.
@@ -32,58 +32,52 @@ func BrowserCORS(next http.Handler) http.Handler {
 	})
 }
 
-// SupabaseJWT verifies Supabase HS256 access tokens using SUPABASE_JWT_SECRET.
-// Configure Supabase to use the matching HS256 signing secret.
-func SupabaseJWT(next http.Handler) http.Handler {
+// SupabaseJWTVerifier validates Supabase ES256 access tokens against the
+// project's remotely published signing keys.
+type SupabaseJWTVerifier struct {
+	keys   keyfunc.Keyfunc
+	cancel context.CancelFunc
+}
+
+func NewSupabaseJWTVerifier(supabaseURL string) (*SupabaseJWTVerifier, error) {
+	supabaseURL = strings.TrimRight(supabaseURL, "/")
+	if supabaseURL == "" {
+		return nil, errors.New("SUPABASE_URL is required")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	keys, err := keyfunc.NewDefaultCtx(ctx, []string{supabaseURL + "/auth/v1/.well-known/jwks.json"})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &SupabaseJWTVerifier{keys: keys, cancel: cancel}, nil
+}
+
+func (v *SupabaseJWTVerifier) Close() {
+	v.cancel()
+}
+
+func (v *SupabaseJWTVerifier) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		secret := os.Getenv("SUPABASE_JWT_SECRET")
-		if secret == "" {
-			http.Error(w, "Authentication is not configured", http.StatusServiceUnavailable)
+		auth := strings.Fields(r.Header.Get("Authorization"))
+		if len(auth) != 2 || !strings.EqualFold(auth[0], "Bearer") {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		auth := strings.Fields(r.Header.Get("Authorization"))
-		if len(auth) != 2 || !strings.EqualFold(auth[0], "Bearer") || !validToken(auth[1], []byte(secret)) {
+
+		claims := jwt.RegisteredClaims{}
+		token, err := jwt.ParseWithClaims(
+			auth[1],
+			&claims,
+			v.keys.Keyfunc,
+			jwt.WithValidMethods([]string{jwt.SigningMethodES256.Alg()}),
+			jwt.WithAudience("authenticated"),
+			jwt.WithExpirationRequired(),
+		)
+		if err != nil || !token.Valid {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func validToken(token string, secret []byte) bool {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return false
-	}
-	var header struct {
-		Algorithm string `json:"alg"`
-	}
-	if json.Unmarshal(headerBytes, &header) != nil || header.Algorithm != "HS256" {
-		return false
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return false
-	}
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
-	if !hmac.Equal(signature, mac.Sum(nil)) {
-		return false
-	}
-	claimsBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return false
-	}
-	var claims struct {
-		Expires  int64  `json:"exp"`
-		Audience string `json:"aud"`
-	}
-	if json.Unmarshal(claimsBytes, &claims) != nil || claims.Expires <= time.Now().Unix() {
-		return false
-	}
-	return claims.Audience == "authenticated"
 }

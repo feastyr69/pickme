@@ -84,7 +84,7 @@ B2_KEY_ID=<application-key-id>
 B2_APPLICATION_KEY=<application-key>
 ```
 
-Only `DATABASE_URL` is currently read by the backend. The other values are placeholders for planned auth and storage integrations. URL-encode special characters in database credentials; for example, encode `@` as `%40` in `DATABASE_URL`.
+The backend reads `DATABASE_URL` and `SUPABASE_URL`; the latter is used to verify ES256 access tokens through Supabase's JWKS endpoint. The remaining values are placeholders for planned auth and storage integrations. URL-encode special characters in database credentials; for example, encode `@` as `%40` in `DATABASE_URL`.
 
 ### Database
 

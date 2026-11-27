@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/feastyr69/pickme/server/internal/handlers"
@@ -29,6 +30,11 @@ func main() {
 
 	groupStore := &store.GroupStore{Pool: db}
 	groupHandler := &handlers.GroupHandler{Store: groupStore}
+	jwtVerifier, err := middleware.NewSupabaseJWTVerifier(os.Getenv("SUPABASE_URL"))
+	if err != nil {
+		log.Fatalf("JWT verifier setup failed: %v", err)
+	}
+	defer jwtVerifier.Close()
 
 	//worker setup
 
@@ -43,9 +49,9 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", handlers.HandleHealthCheck)
-	mux.Handle("POST /api/upload", middleware.SupabaseJWT(http.HandlerFunc(uploadHandler.HandleUpload)))
-	mux.Handle("POST /api/groups", middleware.SupabaseJWT(http.HandlerFunc(groupHandler.CreateGroup)))
-	mux.Handle("GET /api/groups", middleware.SupabaseJWT(http.HandlerFunc(groupHandler.ListGroups)))
+	mux.Handle("POST /api/upload", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.HandleUpload)))
+	mux.Handle("POST /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.CreateGroup)))
+	mux.Handle("GET /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroups)))
 
 	server := &http.Server{
 		Addr:              ":8080",
