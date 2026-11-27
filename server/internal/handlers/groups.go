@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/feastyr69/pickme/server/internal/middleware"
 	"github.com/feastyr69/pickme/server/internal/store"
 )
 
@@ -17,6 +18,11 @@ type createGroupRequest struct {
 }
 
 func (h *GroupHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB cap
 
 	var req createGroupRequest
@@ -31,7 +37,7 @@ func (h *GroupHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	group, err := h.Store.CreateGroup(r.Context(), req.Name)
+	group, err := h.Store.CreateGroup(r.Context(), userID, req.Name)
 	if err != nil {
 		http.Error(w, "Failed to create group", http.StatusInternalServerError)
 		return
@@ -43,7 +49,12 @@ func (h *GroupHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *GroupHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
-	groups, err := h.Store.ListGroups(r.Context())
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	groups, err := h.Store.ListGroups(r.Context(), userID)
 	if err != nil {
 		http.Error(w, "Failed to fetch groups", http.StatusInternalServerError)
 		return

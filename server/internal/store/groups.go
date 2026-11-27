@@ -18,16 +18,16 @@ type GroupStore struct {
 	Pool *pgxpool.Pool
 }
 
-func (s *GroupStore) CreateGroup(ctx context.Context, name string) (*Group, error) {
+func (s *GroupStore) CreateGroup(ctx context.Context, ownerID, name string) (*Group, error) {
 
 	query := `
-	INSERT INTO groups (name)
-	VALUES ($1)
+	INSERT INTO groups (owner_id, name)
+	VALUES ($1, $2)
 	RETURNING id, name, created_at
 	`
 
 	var g Group
-	err := s.Pool.QueryRow(ctx, query, name).Scan(&g.ID, &g.Name, &g.CreatedAt)
+	err := s.Pool.QueryRow(ctx, query, ownerID, name).Scan(&g.ID, &g.Name, &g.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create group: %w", err)
 	}
@@ -35,14 +35,15 @@ func (s *GroupStore) CreateGroup(ctx context.Context, name string) (*Group, erro
 	return &g, nil
 }
 
-func (s *GroupStore) ListGroups(ctx context.Context) ([]Group, error) {
+func (s *GroupStore) ListGroups(ctx context.Context, ownerID string) ([]Group, error) {
 	query := `
 	SELECT id, name, created_at
 	FROM groups
+	WHERE owner_id = $1
 	ORDER BY created_at DESC
 	`
 
-	rows, err := s.Pool.Query(ctx, query)
+	rows, err := s.Pool.Query(ctx, query, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list groups: %w", err)
 	}

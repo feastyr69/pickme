@@ -39,6 +39,13 @@ type SupabaseJWTVerifier struct {
 	cancel context.CancelFunc
 }
 
+type userIDContextKey struct{}
+
+func UserIDFromContext(ctx context.Context) (string, bool) {
+	userID, ok := ctx.Value(userIDContextKey{}).(string)
+	return userID, ok && userID != ""
+}
+
 func NewSupabaseJWTVerifier(supabaseURL string) (*SupabaseJWTVerifier, error) {
 	supabaseURL = strings.TrimRight(supabaseURL, "/")
 	if supabaseURL == "" {
@@ -78,6 +85,11 @@ func (v *SupabaseJWTVerifier) Middleware(next http.Handler) http.Handler {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		if claims.Subject == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), userIDContextKey{}, claims.Subject)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

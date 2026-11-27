@@ -88,16 +88,18 @@ The backend reads `DATABASE_URL` and `SUPABASE_URL`; the latter is used to verif
 
 ### Database
 
-The groups store expects `id`, `name`, and `created_at` columns. This example includes the planned `owner_id`; ownership is not currently used by the API.
+Groups are private to their creator. Delete existing group rows before applying the ownership migration. The API takes the owner from the verified Supabase JWT and never accepts an owner ID from the request body.
 
 ```sql
 create table groups (
     id uuid primary key default gen_random_uuid(),
-    owner_id uuid not null,
+    owner_id uuid not null references auth.users(id),
     name text not null,
     created_at timestamptz not null default now()
 );
 ```
+
+Apply `server/migrations/001_groups_owner.sql` after clearing existing groups.
 
 ### Run the backend
 
