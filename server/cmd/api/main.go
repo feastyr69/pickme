@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/feastyr69/pickme/server/internal/handlers"
+	"github.com/feastyr69/pickme/server/internal/middleware"
 	"github.com/feastyr69/pickme/server/internal/services"
 	"github.com/feastyr69/pickme/server/internal/store"
 	"github.com/joho/godotenv"
@@ -42,13 +43,13 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", handlers.HandleHealthCheck)
-	mux.HandleFunc("POST /api/upload", uploadHandler.HandleUpload)
-	mux.HandleFunc("POST /api/groups", groupHandler.CreateGroup)
-	mux.HandleFunc("GET /api/groups", groupHandler.ListGroups)
+	mux.Handle("POST /api/upload", middleware.SupabaseJWT(http.HandlerFunc(uploadHandler.HandleUpload)))
+	mux.Handle("POST /api/groups", middleware.SupabaseJWT(http.HandlerFunc(groupHandler.CreateGroup)))
+	mux.Handle("GET /api/groups", middleware.SupabaseJWT(http.HandlerFunc(groupHandler.ListGroups)))
 
 	server := &http.Server{
 		Addr:              ":8080",
-		Handler:           mux,
+		Handler:           middleware.BrowserCORS(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

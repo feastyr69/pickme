@@ -1,2 +1,13 @@
-server/.env
+# Environment secrets (keep templates trackable)
 .env
+.env.*
+!.env.example
+
+# Go backend environment file
+server/.env
+
+# Next.js dependencies and generated output
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
