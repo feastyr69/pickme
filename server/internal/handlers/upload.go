@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -26,7 +28,8 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	//error control
 
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "multipart/form-data" {
 		http.Error(w, "Invalid content type", http.StatusUnsupportedMediaType)
 		return
 	}
@@ -34,8 +37,16 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
-		http.Error(w, "File too large", http.StatusRequestEntityTooLarge)
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "File too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "Invalid multipart form", http.StatusBadRequest)
+		}
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 
 	groupID := strings.TrimSpace(r.FormValue("group_id"))
@@ -64,17 +75,9 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		http.Error(w, "Failed to process file", http.StatusInternalServerError)
-		return
-	}
-
-	//successful upload, send to worker queue
-
 	log.Println("Received file upload request")
 
 	job := services.ImageJob{
-		TempPath: "/tmp/uploaded_file.jpg",
 		GroupID:  groupID,
 		FileType: detectedType,
 	}
@@ -82,10 +85,10 @@ func (h *UploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	select {
 	case h.WorkerPool.JobQueue <- job:
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusAccepted)
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "ok",
-			"message": "File uploaded successfully",
+			"message": "Upload accepted for processing",
 		})
 	default:
 		http.Error(w, "Server is busy. Please try again later.", http.StatusServiceUnavailable)

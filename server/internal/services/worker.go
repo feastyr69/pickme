@@ -6,7 +6,6 @@ import (
 )
 
 type ImageJob struct {
-	TempPath string
 	GroupID  string
 	FileType string
 }
@@ -23,11 +22,11 @@ func NewWorkerPool(queueSize int) *WorkerPool {
 
 func (wp *WorkerPool) worker(id int) {
 	for job := range wp.JobQueue {
-		log.Printf("[Worker %d] Processing image at %s for group %s with file type %s\n", id, job.TempPath, job.GroupID, job.FileType)
+		log.Printf("[Worker %d] Processing upload for group %s with file type %s\n", id, job.GroupID, job.FileType)
 
 		time.Sleep(2 * time.Second) // Simulate processing time
 
-		log.Printf("[Worker %d] Finished processing image at %s for group %s\n", id, job.TempPath, job.GroupID)
+		log.Printf("[Worker %d] Finished processing upload for group %s\n", id, job.GroupID)
 
 	}
 }

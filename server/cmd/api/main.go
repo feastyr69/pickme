@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/feastyr69/pickme/server/internal/handlers"
 	"github.com/feastyr69/pickme/server/internal/services"
@@ -45,8 +46,16 @@ func main() {
 	mux.HandleFunc("POST /api/groups", groupHandler.CreateGroup)
 	mux.HandleFunc("GET /api/groups", groupHandler.ListGroups)
 
+	server := &http.Server{
+		Addr:              ":8080",
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	log.Println("Starting server on :8080")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }
