@@ -6,11 +6,11 @@
 
 pickME is designed for shared event photo groups, with photos clustered and filtered using face embeddings. The target architecture uses a free-tier cloud stack, a stateless Go API, and direct-to-storage uploads so image bytes do not pass through the API server.
 
-> **Implementation status:** The repository currently contains the Go API, groups endpoints, health check, and multipart upload validation. The Next.js app, authentication middleware, direct uploads, and biometric processing described below are planned architecture.
+> **Implementation status:** The repository contains a Go API with Supabase JWT authentication, user-owned groups, direct-to-storage upload signing, photo metadata, and original download signing. The worker remains a processing placeholder; biometric clustering is planned.
 
 ## Architecture and upload flow
 
-The following is the planned upload flow. The current `POST /api/upload` endpoint accepts multipart uploads; presigned upload endpoints are not implemented yet.
+The client creates two WebP derivatives, uploads them to the public Supabase `media` bucket, and sends the full-resolution original directly to the private Backblaze B2 bucket. The Go API handles only metadata and presigned URLs.
 
 ```mermaid
 sequenceDiagram
@@ -29,7 +29,7 @@ sequenceDiagram
     end
     C->>API: Confirm upload
     API->>W: Enqueue image processing job
-    W->>DB: Store face embeddings
+    W->>DB: Process preview (placeholder worker)
 ```
 
 ## Tech stack
@@ -53,9 +53,11 @@ server/
 │   └── api/main.go             # Entry point, dependency setup, route registration
 └── internal/
     ├── handlers/               # health.go, groups.go, upload.go
-    ├── middleware/              # auth.go (planned Supabase JWT verification)
-    ├── services/               # worker.go (placeholder worker pool; clustering planned)
-    └── store/                  # db.go, groups.go
+    ├── middleware/             # auth.go (Supabase ES256 JWT verification)
+    ├── services/               # worker.go (placeholder image processing)
+    ├── storage/                # clients.go (B2 and Supabase S3 presigning)
+    ├── store/                  # db.go, groups.go, photos.go
+    └── migrations/             # owner-groups and photos schema
 ```
 
 ## Local development
@@ -63,9 +65,9 @@ server/
 ### Prerequisites
 
 - Go 1.22 or newer
-- Node.js (for the planned Next.js frontend)
+- Node.js
 - Supabase project
-- Backblaze B2 account (for planned original image storage)
+- Backblaze B2 account
 
 The backend module currently declares Go 1.26.10 in `server/go.mod`.
 
@@ -77,14 +79,21 @@ Create `server/.env` for local development:
 DATABASE_URL=postgresql://postgres:<password>@<host>:5432/postgres
 SUPABASE_URL=https://<project-ref>.supabase.co
 SUPABASE_ANON_KEY=<supabase-anon-key>
-SUPABASE_SERVICE_ROLE_KEY=<supabase-service-role-key>
-B2_ENDPOINT=<s3-compatible-endpoint>
-B2_BUCKET=<bucket-name>
+SUPABASE_S3_REGION=<supabase-s3-region>
+SUPABASE_S3_ENDPOINT=https://<project-ref>.supabase.co/storage/v1/s3
+SUPABASE_S3_KEY_ID=<supabase-s3-access-key-id>
+SUPABASE_S3_SECRET=<supabase-s3-secret-access-key>
+SUPABASE_BUCKET=media
+B2_REGION=<b2-s3-region>
+B2_ENDPOINT=https://s3.<region>.backblazeb2.com
 B2_KEY_ID=<application-key-id>
-B2_APPLICATION_KEY=<application-key>
+B2_APP_KEY=<application-key>
+B2_BUCKET=pickme-originals
 ```
 
-The backend reads `DATABASE_URL` and `SUPABASE_URL`; the latter is used to verify ES256 access tokens through Supabase's JWKS endpoint. The remaining values are placeholders for planned auth and storage integrations. URL-encode special characters in database credentials; for example, encode `@` as `%40` in `DATABASE_URL`.
+The backend reads `DATABASE_URL`, `SUPABASE_URL`, and the storage settings shown below. `SUPABASE_URL` is used to verify ES256 access tokens through Supabase's JWKS endpoint. URL-encode special characters in database credentials; for example, encode `@` as `%40` in `DATABASE_URL`.
+
+Create the public Supabase `media` bucket and configure browser CORS on both storage providers for the frontend origin. Apply `server/migrations/002_photos.sql` after the groups ownership migration.
 
 ### Database
 
@@ -117,16 +126,18 @@ The API listens on `:8080`. An `air` command is also possible if Air is installe
 | `GET` | `/health` | Implemented | Health check |
 | `POST` | `/api/groups` | Implemented | Create a group |
 | `GET` | `/api/groups` | Implemented | List groups |
-| `POST` | `/api/upload` | Implemented | Validate multipart photo and enqueue placeholder job |
-| `POST` | `/api/uploads/presign` | Planned | Request direct upload URLs |
-| `POST` | `/api/uploads/complete` | Planned | Confirm uploaded objects and enqueue processing |
+| `POST` | `/api/uploads/presign` | Implemented | Request direct upload URLs for a group |
+| `POST` | `/api/uploads/complete` | Implemented | Save uploaded photo metadata and enqueue processing |
+| `GET` | `/api/photos/{id}/download` | Implemented | Request a temporary original download URL |
 
 ## Roadmap
 
 - [x] Health check
 - [x] Supabase PostgreSQL connection pool
 - [x] Groups API
-- [x] Multipart upload size and content-type validation
+- [x] Direct uploads for thumbnails, previews, and originals
+- [x] Owner-scoped photo downloads
+- [ ] Biometric embedding and clustering worker
 - [ ] Supabase Google Sign-In and JWT verification middleware
 - [ ] Presigned direct uploads to Backblaze B2 and Supabase Storage
 - [ ] Face embedding worker and `pgvector` storage

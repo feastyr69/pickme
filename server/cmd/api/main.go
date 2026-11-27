@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/feastyr69/pickme/server/internal/handlers"
 	"github.com/feastyr69/pickme/server/internal/middleware"
 	"github.com/feastyr69/pickme/server/internal/services"
+	"github.com/feastyr69/pickme/server/internal/storage"
 	"github.com/feastyr69/pickme/server/internal/store"
 	"github.com/joho/godotenv"
 )
@@ -30,6 +32,11 @@ func main() {
 
 	groupStore := &store.GroupStore{Pool: db}
 	groupHandler := &handlers.GroupHandler{Store: groupStore}
+	photoStore := &store.PhotoStore{Pool: db}
+	dualStorage, err := storage.NewDualStorage(context.Background())
+	if err != nil {
+		log.Fatalf("Storage setup failed: %v", err)
+	}
 	jwtVerifier, err := middleware.NewSupabaseJWTVerifier(os.Getenv("SUPABASE_URL"))
 	if err != nil {
 		log.Fatalf("JWT verifier setup failed: %v", err)
@@ -43,13 +50,18 @@ func main() {
 
 	uploadHandler := &handlers.UploadHandler{
 		WorkerPool: pool,
+		Groups:     groupStore,
+		Photos:     photoStore,
+		Storage:    dualStorage,
 	}
 
 	//http server setup
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", handlers.HandleHealthCheck)
-	mux.Handle("POST /api/upload", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.HandleUpload)))
+	mux.Handle("POST /api/uploads/presign", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.PresignUploads)))
+	mux.Handle("POST /api/uploads/complete", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.CompleteUpload)))
+	mux.Handle("GET /api/photos/{id}/download", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.DownloadOriginal)))
 	mux.Handle("POST /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.CreateGroup)))
 	mux.Handle("GET /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroups)))
 

@@ -60,3 +60,9 @@ func (s *GroupStore) ListGroups(ctx context.Context, ownerID string) ([]Group, e
 
 	return groups, rows.Err()
 }
+
+func (s *GroupStore) UserOwnsGroup(ctx context.Context, ownerID, groupID string) (bool, error) {
+	var exists bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM groups WHERE id = $1 AND owner_id = $2)`, groupID, ownerID).Scan(&exists)
+	return exists, err
+}
