@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -37,7 +38,8 @@ type InvitationDetails struct {
 }
 
 type GroupStore struct {
-	Pool *pgxpool.Pool
+	Pool  *pgxpool.Pool
+	Cache *MemoryCache
 }
 
 var ErrLegacyInvitationTokenUnavailable = errors.New("the active invitation predates recoverable token storage")
@@ -55,12 +57,18 @@ func (s *GroupStore) CreateGroup(ctx context.Context, ownerID, name string) (*Gr
 	if err != nil {
 		return nil, fmt.Errorf("failed to create group: %w", err)
 	}
+	s.Cache.Clear()
 	g.IsOwner = true
 
 	return &g, nil
 }
 
 func (s *GroupStore) ListGroups(ctx context.Context, ownerID string) ([]Group, error) {
+	cacheKey := "groups:list:" + ownerID
+	var cached []Group
+	if s.Cache.Get(cacheKey, &cached) {
+		return cached, nil
+	}
 	query := `
 	SELECT g.id, g.name, g.created_at, (g.owner_id = $1) AS is_owner
 	FROM groups g
@@ -86,7 +94,11 @@ func (s *GroupStore) ListGroups(ctx context.Context, ownerID string) ([]Group, e
 		groups = append(groups, g)
 	}
 
-	return groups, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.Cache.Set(cacheKey, groups)
+	return groups, nil
 }
 
 func (s *GroupStore) UserOwnsGroup(ctx context.Context, ownerID, groupID string) (bool, error) {
@@ -112,6 +124,11 @@ func (s *GroupStore) UserCanAccessGroup(ctx context.Context, userID, groupID str
 }
 
 func (s *GroupStore) ListGroupMembers(ctx context.Context, groupID string) ([]GroupMember, error) {
+	cacheKey := "groups:members:" + groupID
+	var cached []GroupMember
+	if s.Cache.Get(cacheKey, &cached) {
+		return cached, nil
+	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT u.id, COALESCE(u.email, ''), TRUE
 		FROM groups g JOIN auth.users u ON u.id = g.owner_id
@@ -138,6 +155,7 @@ func (s *GroupStore) ListGroupMembers(ctx context.Context, groupID string) ([]Gr
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate group members: %w", err)
 	}
+	s.Cache.Set(cacheKey, members)
 	return members, nil
 }
 
@@ -151,7 +169,11 @@ func (s *GroupStore) RemoveGroupMember(ctx context.Context, groupID, ownerID, me
 	if err != nil {
 		return false, fmt.Errorf("remove group member: %w", err)
 	}
-	return result.RowsAffected() > 0, nil
+	removed := result.RowsAffected() > 0
+	if removed {
+		s.Cache.Clear()
+	}
+	return removed, nil
 }
 
 func (s *GroupStore) GetOrCreateGroupInvitation(ctx context.Context, groupID, ownerID string, tokenHash []byte, token string, expiresAt time.Time) (*GroupInvitation, bool, error) {
@@ -210,10 +232,20 @@ func (s *GroupStore) GetOrCreateGroupInvitation(ctx context.Context, groupID, ow
 	if err := tx.Commit(ctx); err != nil {
 		return nil, false, fmt.Errorf("commit group invitation: %w", err)
 	}
+	s.Cache.Clear()
 	return &invitation, true, nil
 }
 
 func (s *GroupStore) GetInvitationDetails(ctx context.Context, tokenHash []byte) (*InvitationDetails, error) {
+	cacheKey := "invites:details:" + hex.EncodeToString(tokenHash)
+	var cached InvitationDetails
+	if s.Cache.Get(cacheKey, &cached) {
+		if time.Now().Before(cached.ExpiresAt) {
+			return &cached, nil
+		}
+		s.Cache.Delete(cacheKey)
+		return nil, pgx.ErrNoRows
+	}
 	var details InvitationDetails
 	err := s.Pool.QueryRow(ctx, `
 		SELECT g.id, g.name, gi.expires_at
@@ -223,6 +255,7 @@ func (s *GroupStore) GetInvitationDetails(ctx context.Context, tokenHash []byte)
 	if err != nil {
 		return nil, err
 	}
+	s.Cache.Set(cacheKey, details)
 	return &details, nil
 }
 
@@ -246,16 +279,22 @@ func (s *GroupStore) AcceptGroupInvitation(ctx context.Context, tokenHash []byte
 	if err != nil {
 		return "", fmt.Errorf("fetch group invitation: %w", err)
 	}
+	membershipChanged := false
 	if ownerID != userID {
-		if _, err := tx.Exec(ctx, `
+		result, err := tx.Exec(ctx, `
 			INSERT INTO group_members (group_id, user_id)
 			VALUES ($1, $2) ON CONFLICT (group_id, user_id) DO NOTHING
-		`, groupID, userID); err != nil {
+		`, groupID, userID)
+		if err != nil {
 			return "", fmt.Errorf("add group member: %w", err)
 		}
+		membershipChanged = result.RowsAffected() > 0
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("commit invitation acceptance: %w", err)
+	}
+	if membershipChanged {
+		s.Cache.Clear()
 	}
 	return groupID, nil
 }
@@ -265,5 +304,9 @@ func (s *GroupStore) DeleteGroupForUser(ctx context.Context, ownerID, groupID st
 	if err != nil {
 		return false, fmt.Errorf("delete group: %w", err)
 	}
-	return result.RowsAffected() > 0, nil
+	deleted := result.RowsAffected() > 0
+	if deleted {
+		s.Cache.Clear()
+	}
+	return deleted, nil
 }

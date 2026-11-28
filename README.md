@@ -113,6 +113,8 @@ Add the frontend origin and its `/invite/*` path to Supabase Auth's allowed redi
 
 Groups are created by an owner. Owners can copy the group's current seven-day invite link at any time; the backend reuses it until expiry, then creates a new link on the next invite request. Signed-in users can reuse a link to join until it expires. Members can view, upload, and download group photos. Only the owner can delete the group or manage members. Group access is always checked against the verified Supabase JWT identity.
 
+The Go API caches read results in process for up to one minute and clears the cache after successful writes. Ownership and membership checks always query PostgreSQL; changes made outside the API may take up to one minute to appear in cached lists.
+
 The existing Supabase `media` bucket is public, so group membership protects API access but does not make a known thumbnail or preview URL private. Private image access would require changing the bucket and issuing signed read URLs.
 
 ```sql

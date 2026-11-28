@@ -32,8 +32,9 @@ func main() {
 	defer db.Close()
 	log.Println("Connected to Supabase PostgreSQL")
 
-	groupStore := &store.GroupStore{Pool: db}
-	photoStore := &store.PhotoStore{Pool: db}
+	readCache := store.NewMemoryCache()
+	groupStore := &store.GroupStore{Pool: db, Cache: readCache}
+	photoStore := &store.PhotoStore{Pool: db, Cache: readCache}
 	dualStorage, err := storage.NewDualStorage(context.Background())
 	if err != nil {
 		log.Fatalf("Storage setup failed: %v", err)

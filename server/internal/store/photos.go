@@ -32,7 +32,10 @@ type Photo struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-type PhotoStore struct{ Pool *pgxpool.Pool }
+type PhotoStore struct {
+	Pool  *pgxpool.Pool
+	Cache *MemoryCache
+}
 
 type FaceEmbedding struct {
 	BBox      []int32
@@ -77,11 +80,22 @@ func (s *PhotoStore) CreatePhoto(ctx context.Context, photo Photo) (*Photo, erro
 	if err != nil {
 		return nil, fmt.Errorf("create photo: %w", err)
 	}
+	s.Cache.Clear()
 	return &created, nil
 }
 
 func (s *PhotoStore) GetPhotoByID(ctx context.Context, id string) (*Photo, error) {
-	return scanPhoto(s.Pool.QueryRow(ctx, `SELECT id, group_id, thumb_url, preview_url, original_key, status, created_at FROM photos WHERE id = $1`, id))
+	cacheKey := "photos:by-id:" + id
+	var cached Photo
+	if s.Cache.Get(cacheKey, &cached) {
+		return &cached, nil
+	}
+	photo, err := scanPhoto(s.Pool.QueryRow(ctx, `SELECT id, group_id, thumb_url, preview_url, original_key, status, created_at FROM photos WHERE id = $1`, id))
+	if err != nil {
+		return nil, err
+	}
+	s.Cache.Set(cacheKey, photo)
+	return photo, nil
 }
 
 func (s *PhotoStore) GetPhotoByIDForUser(ctx context.Context, id, userID string) (*Photo, error) {
@@ -105,28 +119,34 @@ func (s *PhotoStore) GetPhotoByIDForMember(ctx context.Context, id, userID strin
 }
 
 func (s *PhotoStore) ListPhotosByGroup(ctx context.Context, groupID string) ([]Photo, error) {
-	rows, err := s.Pool.Query(ctx, `
+	return s.cachedListPhotos(ctx, "photos:group:"+groupID, `
 		SELECT id, group_id, thumb_url, preview_url, original_key, status, created_at
 		FROM photos
 		WHERE group_id = $1
 		ORDER BY created_at DESC, id DESC
 	`, groupID)
-	if err != nil {
-		return nil, fmt.Errorf("list group photos: %w", err)
-	}
-	defer rows.Close()
+}
 
-	photos := make([]Photo, 0)
-	for rows.Next() {
-		var photo Photo
-		if err := rows.Scan(&photo.ID, &photo.GroupID, &photo.ThumbURL, &photo.PreviewURL, &photo.OriginalKey, &photo.Status, &photo.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan group photo: %w", err)
-		}
-		photos = append(photos, photo)
+// ListPhotosByGroupFresh bypasses the read cache for destructive cleanup paths.
+func (s *PhotoStore) ListPhotosByGroupFresh(ctx context.Context, groupID string) ([]Photo, error) {
+	return s.listPhotos(ctx, `
+		SELECT id, group_id, thumb_url, preview_url, original_key, status, created_at
+		FROM photos
+		WHERE group_id = $1
+		ORDER BY created_at DESC, id DESC
+	`, groupID)
+}
+
+func (s *PhotoStore) cachedListPhotos(ctx context.Context, cacheKey, query string, args ...any) ([]Photo, error) {
+	var cached []Photo
+	if s.Cache.Get(cacheKey, &cached) {
+		return cached, nil
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate group photos: %w", err)
+	photos, err := s.listPhotos(ctx, query, args...)
+	if err != nil {
+		return nil, err
 	}
+	s.Cache.Set(cacheKey, photos)
 	return photos, nil
 }
 
@@ -138,6 +158,7 @@ func (s *PhotoStore) SetPhotoStatus(ctx context.Context, photoID, status string)
 	if result.RowsAffected() == 0 {
 		return ErrPhotoNotFound
 	}
+	s.Cache.Clear()
 	return nil
 }
 
@@ -171,10 +192,16 @@ func (s *PhotoStore) DeletePhotoForUser(ctx context.Context, photoID, userID str
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("commit photo deletion: %w", err)
 	}
+	s.Cache.Clear()
 	return true, nil
 }
 
 func (s *PhotoStore) FaceGroupOverview(ctx context.Context, groupID string) (*FaceGroupOverview, error) {
+	cacheKey := "photos:overview:" + groupID
+	var cached FaceGroupOverview
+	if s.Cache.Get(cacheKey, &cached) {
+		return &cached, nil
+	}
 	overview := &FaceGroupOverview{
 		FaceGroups:         make([]FaceGroup, 0),
 		PendingPhotoIDs:    make([]string, 0),
@@ -256,11 +283,12 @@ func (s *PhotoStore) FaceGroupOverview(ctx context.Context, groupID string) (*Fa
 	if err := statusRows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate photo processing states: %w", err)
 	}
+	s.Cache.Set(cacheKey, overview)
 	return overview, nil
 }
 
 func (s *PhotoStore) ListPhotosByFaceCluster(ctx context.Context, groupID, clusterID string) ([]Photo, error) {
-	return s.listPhotos(ctx, `
+	return s.cachedListPhotos(ctx, "photos:face-cluster:"+groupID+":"+clusterID, `
 		SELECT DISTINCT p.id, p.group_id, p.thumb_url, p.preview_url, p.original_key, p.status, p.created_at
 		FROM photos p
 		JOIN face_embeddings fe ON fe.photo_id = p.id
@@ -271,7 +299,7 @@ func (s *PhotoStore) ListPhotosByFaceCluster(ctx context.Context, groupID, clust
 }
 
 func (s *PhotoStore) ListNoFacePhotos(ctx context.Context, groupID string) ([]Photo, error) {
-	return s.listPhotos(ctx, `
+	return s.cachedListPhotos(ctx, "photos:no-face:"+groupID, `
 		SELECT p.id, p.group_id, p.thumb_url, p.preview_url, p.original_key, p.status, p.created_at
 		FROM photos p
 		WHERE p.group_id = $1 AND p.status = $2
@@ -281,7 +309,7 @@ func (s *PhotoStore) ListNoFacePhotos(ctx context.Context, groupID string) ([]Ph
 }
 
 func (s *PhotoStore) ListUnprocessedPhotos(ctx context.Context, groupID string) ([]Photo, error) {
-	return s.listPhotos(ctx, `
+	return s.cachedListPhotos(ctx, "photos:unprocessed:"+groupID, `
 		SELECT id, group_id, thumb_url, preview_url, original_key, status, created_at
 		FROM photos WHERE group_id = $1 AND status = $2
 		ORDER BY created_at DESC, id DESC
@@ -383,6 +411,7 @@ func (s *PhotoStore) ReplaceFaceEmbeddings(ctx context.Context, photoID, groupID
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit face embeddings: %w", err)
 	}
+	s.Cache.Clear()
 	return nil
 }
 

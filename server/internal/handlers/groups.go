@@ -100,7 +100,7 @@ func (h *GroupHandler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	photos, err := h.Photos.ListPhotosByGroup(r.Context(), groupID)
+	photos, err := h.Photos.ListPhotosByGroupFresh(r.Context(), groupID)
 	if err != nil {
 		http.Error(w, "Failed to list group photos for cleanup", http.StatusInternalServerError)
 		return
