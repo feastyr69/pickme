@@ -4,20 +4,38 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/feastyr69/pickme/server/internal/store"
 )
 
 type FaceEmbeddingWriter interface {
-	ReplaceFaceEmbeddings(context.Context, string, string, []store.FaceEmbedding) error
+	SetPhotoStatus(context.Context, string, string) error
+	ReplaceFaceEmbeddings(context.Context, string, string, []store.FaceEmbedding, float64) error
 }
 
 type PhotoProcessor struct {
 	Extractor FaceExtractor
 	Photos    FaceEmbeddingWriter
+	Threshold float64
 }
 
 func (p *PhotoProcessor) Process(ctx context.Context, job ImageJob) error {
+	if err := p.Photos.SetPhotoStatus(ctx, job.PhotoID, store.PhotoStatusProcessing); err != nil {
+		return fmt.Errorf("mark photo %s processing: %w", job.PhotoID, err)
+	}
+	if err := p.process(ctx, job); err != nil {
+		statusCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if statusErr := p.Photos.SetPhotoStatus(statusCtx, job.PhotoID, store.PhotoStatusFailed); statusErr != nil {
+			return fmt.Errorf("%w (also failed to mark photo failed: %v)", err, statusErr)
+		}
+		return err
+	}
+	return nil
+}
+
+func (p *PhotoProcessor) process(ctx context.Context, job ImageJob) error {
 	faces, err := p.Extractor.Extract(ctx, job.PreviewURL)
 	if err != nil {
 		return fmt.Errorf("extract faces for photo %s: %w", job.PhotoID, err)
@@ -43,7 +61,10 @@ func (p *PhotoProcessor) Process(ctx context.Context, job ImageJob) error {
 		embeddings = append(embeddings, store.FaceEmbedding{BBox: bbox, Embedding: face.Embedding})
 	}
 
-	if err := p.Photos.ReplaceFaceEmbeddings(ctx, job.PhotoID, job.GroupID, embeddings); err != nil {
+	if math.IsNaN(p.Threshold) || math.IsInf(p.Threshold, 0) || p.Threshold <= 0 || p.Threshold > 1 {
+		return fmt.Errorf("face match threshold must be greater than 0 and at most 1")
+	}
+	if err := p.Photos.ReplaceFaceEmbeddings(ctx, job.PhotoID, job.GroupID, embeddings, p.Threshold); err != nil {
 		return fmt.Errorf("save faces for photo %s: %w", job.PhotoID, err)
 	}
 	return nil

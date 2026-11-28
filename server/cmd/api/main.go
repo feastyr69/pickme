@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"log"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/feastyr69/pickme/server/internal/handlers"
@@ -31,12 +34,12 @@ func main() {
 	log.Println("Connected to Supabase PostgreSQL")
 
 	groupStore := &store.GroupStore{Pool: db}
-	groupHandler := &handlers.GroupHandler{Store: groupStore}
 	photoStore := &store.PhotoStore{Pool: db}
 	dualStorage, err := storage.NewDualStorage(context.Background())
 	if err != nil {
 		log.Fatalf("Storage setup failed: %v", err)
 	}
+	groupHandler := &handlers.GroupHandler{Store: groupStore, Photos: photoStore, Storage: dualStorage}
 	jwtVerifier, err := middleware.NewSupabaseJWTVerifier(os.Getenv("SUPABASE_URL"))
 	if err != nil {
 		log.Fatalf("JWT verifier setup failed: %v", err)
@@ -49,7 +52,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("Face extractor setup failed: %v", err)
 	}
-	photoProcessor := &services.PhotoProcessor{Extractor: faceExtractor, Photos: photoStore}
+	faceMatchThreshold := 0.55
+	if configuredThreshold := strings.TrimSpace(os.Getenv("FACE_MATCH_THRESHOLD")); configuredThreshold != "" {
+		faceMatchThreshold, err = strconv.ParseFloat(configuredThreshold, 64)
+		if err != nil || math.IsNaN(faceMatchThreshold) || math.IsInf(faceMatchThreshold, 0) || faceMatchThreshold <= 0 || faceMatchThreshold > 1 {
+			log.Fatal("FACE_MATCH_THRESHOLD must be greater than 0 and at most 1")
+		}
+	}
+	photoProcessor := &services.PhotoProcessor{Extractor: faceExtractor, Photos: photoStore, Threshold: faceMatchThreshold}
 	pool := services.NewWorkerPool(100, photoProcessor)
 	pool.Start(5)
 
@@ -67,9 +77,14 @@ func main() {
 	mux.Handle("POST /api/uploads/presign", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.PresignUploads)))
 	mux.Handle("POST /api/uploads/complete", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.CompleteUpload)))
 	mux.Handle("GET /api/groups/{id}/photos", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.ListGroupPhotos)))
+	mux.Handle("GET /api/groups/{id}/face-groups", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.ListFaceGroups)))
+	mux.Handle("GET /api/groups/{id}/face-groups/{clusterID}/photos", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.ListFaceClusterPhotos)))
+	mux.Handle("GET /api/groups/{id}/no-face-photos", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.ListNoFacePhotos)))
+	mux.Handle("GET /api/groups/{id}/unprocessed-photos", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.ListUnprocessedPhotos)))
 	mux.Handle("GET /api/photos/{id}/download", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.DownloadOriginal)))
 	mux.Handle("POST /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.CreateGroup)))
 	mux.Handle("GET /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroups)))
+	mux.Handle("DELETE /api/groups/{id}", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.DeleteGroup)))
 
 	server := &http.Server{
 		Addr:              ":8080",

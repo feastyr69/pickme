@@ -6,7 +6,7 @@
 
 pickME is designed for shared event photo groups, with photos clustered and filtered using face embeddings. The target architecture uses a free-tier cloud stack, a stateless Go API, and direct-to-storage uploads so image bytes do not pass through the API server.
 
-> **Implementation status:** The repository contains a Go API with Supabase JWT authentication, user-owned groups, direct-to-storage uploads, photo metadata, original download signing, and an asynchronous face-extraction worker that stores face embeddings in pgvector. Semantic and identity-based clustering is planned.
+> **Implementation status:** The Go API supports Supabase JWT authentication, user-owned groups, direct-to-storage uploads, original downloads, asynchronous face extraction, group-scoped face clustering, and face/no-face galleries. Existing photos are kept in an Unprocessed collection; clustering applies to uploads processed after the migration.
 
 ## Architecture and upload flow
 
@@ -33,7 +33,10 @@ sequenceDiagram
     W->>AI: POST preview URL to /extract
     AI->>S: Fetch preview image
     AI-->>W: Face bounding boxes + 512-value embeddings
-    W->>DB: Store one face_embeddings row per face
+    W->>W: Match faces conservatively within the group
+    W->>DB: Store embeddings, cluster IDs, and photo status
+    C->>API: Poll face-group overview
+    API-->>C: Face collections + no-face/unprocessed counts
 ```
 
 ## Tech stack
@@ -56,13 +59,14 @@ Current and planned backend layout:
 server/
 ├── cmd/
 │   └── api/main.go             # Entry point, dependency setup, route registration
+├── migrations/
+│   └── 003_face_clusters.sql   # Cluster table, embedding link, processing indexes
 └── internal/
     ├── handlers/               # health.go, groups.go, upload.go
     ├── middleware/             # auth.go (Supabase ES256 JWT verification)
     ├── services/               # worker.go, face_extractor.go, photo_processor.go
     ├── storage/                # clients.go (B2 and Supabase S3 presigning)
     ├── store/                  # db.go, groups.go, photos.go
-    └── migrations/             # owner-groups and photos schema
 ```
 
 ## Local development
@@ -95,15 +99,16 @@ B2_KEY_ID=<application-key-id>
 B2_APP_KEY=<application-key>
 B2_BUCKET=pickme-originals
 FACE_EXTRACTOR_URL=http://localhost:8000
+FACE_MATCH_THRESHOLD=0.55
 ```
 
 The backend reads `DATABASE_URL`, `SUPABASE_URL`, the storage settings, and `FACE_EXTRACTOR_URL`. The face extractor must be reachable by the Go backend and able to fetch the public Supabase preview URL. `SUPABASE_URL` is used to verify ES256 access tokens through Supabase's JWKS endpoint. URL-encode special characters in database credentials; for example, encode `@` as `%40` in `DATABASE_URL`.
 
-Create the public Supabase `media` bucket and configure browser CORS on both storage providers for the frontend origin. Apply `server/migrations/002_photos.sql` after the groups ownership migration.
+Create the public Supabase `media` bucket and configure browser CORS on both storage providers for the frontend origin. The storage credentials need permission to delete objects for group deletion. The embedding table must already exist with `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)` columns as described below. Apply `server/migrations/003_face_clusters.sql` after the `groups`, `photos`, and `face_embeddings` tables exist. Set `FACE_MATCH_THRESHOLD` between `0` and `1`; the default `0.55` is intentionally conservative and may need tuning for the extractor/model and your photos.
 
 ### Database
 
-Groups are private to their creator. Delete existing group rows before applying the ownership migration. The API takes the owner from the verified Supabase JWT and never accepts an owner ID from the request body.
+Groups are private to their creator. The API takes the owner from the verified Supabase JWT and never accepts an owner ID from the request body.
 
 ```sql
 create table groups (
@@ -114,9 +119,9 @@ create table groups (
 );
 ```
 
-Apply `server/migrations/001_groups_owner.sql` after clearing existing groups.
+Ensure the `groups` table includes the `owner_id` column before running the API.
 
-The face worker writes one row per detected face to the existing `face_embeddings` table using `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)`. The extractor's detection score is not stored.
+The face worker writes one row per detected face to `face_embeddings` using `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)`. Migration `003_face_clusters.sql` adds its `cluster_id` link and creates `face_clusters`. A processed photo with no embedding rows appears under **No faces**. Photos present before that migration are marked **Unprocessed** and are not automatically reprocessed. The extractor's detection score is not stored.
 
 ### Run the backend
 
@@ -142,9 +147,14 @@ Set `FACE_EXTRACTOR_URL` to the extractor's base URL if it is not reachable at `
 | `GET` | `/health` | Implemented | Health check |
 | `POST` | `/api/groups` | Implemented | Create a group |
 | `GET` | `/api/groups` | Implemented | List groups |
+| `DELETE` | `/api/groups/{id}` | Implemented | Delete an owned group and its stored photos |
 | `POST` | `/api/uploads/presign` | Implemented | Request direct upload URLs for a group |
 | `POST` | `/api/uploads/complete` | Implemented | Save uploaded photo metadata and enqueue processing |
 | `GET` | `/api/groups/{id}/photos` | Implemented | List a group's photos |
+| `GET` | `/api/groups/{id}/face-groups` | Implemented | List face collections, no-face/unprocessed counts, and active processing IDs |
+| `GET` | `/api/groups/{id}/face-groups/{clusterID}/photos` | Implemented | List photos containing a face in that group |
+| `GET` | `/api/groups/{id}/no-face-photos` | Implemented | List processed photos without detected faces |
+| `GET` | `/api/groups/{id}/unprocessed-photos` | Implemented | List photos not run through the new face grouping flow |
 | `GET` | `/api/photos/{id}/download` | Implemented | Request a temporary original download URL |
 
 ## Roadmap
@@ -155,7 +165,8 @@ Set `FACE_EXTRACTOR_URL` to the extractor's base URL if it is not reachable at `
 - [x] Direct uploads for thumbnails, previews, and originals
 - [x] Owner-scoped photo downloads
 - [x] Face extraction worker and `pgvector` embedding storage
-- [ ] Semantic and identity-based face clustering
-- [ ] Supabase Google Sign-In and JWT verification middleware
-- [ ] Presigned direct uploads to Backblaze B2 and Supabase Storage
+- [x] Group-scoped face clustering and face/no-face collections for new uploads
+- [x] Supabase Google Sign-In and JWT verification middleware
+- [x] Presigned direct uploads to Backblaze B2 and Supabase Storage
+- [ ] ZIP download for a face collection
 - [ ] WebSocket updates for processing and gallery changes

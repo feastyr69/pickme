@@ -137,8 +137,103 @@ func (h *UploadHandler) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 	case h.WorkerPool.JobQueue <- job:
 		writeJSON(w, http.StatusAccepted, photo)
 	default:
+		if err := h.Photos.SetPhotoStatus(r.Context(), photo.ID, store.PhotoStatusFailed); err != nil {
+			http.Error(w, "Server is busy and photo status could not be saved", http.StatusInternalServerError)
+			return
+		}
 		http.Error(w, "Server is busy. Please try again later.", http.StatusServiceUnavailable)
 	}
+}
+
+func (h *UploadHandler) ListFaceGroups(w http.ResponseWriter, r *http.Request) {
+	groupID, ok := h.ownedGroup(w, r)
+	if !ok {
+		return
+	}
+	overview, err := h.Photos.FaceGroupOverview(r.Context(), groupID)
+	if err != nil {
+		http.Error(w, "Failed to fetch face groups", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, overview)
+}
+
+func (h *UploadHandler) ListFaceClusterPhotos(w http.ResponseWriter, r *http.Request) {
+	groupID, ok := h.ownedGroup(w, r)
+	if !ok {
+		return
+	}
+	clusterID, err := uuid.Parse(r.PathValue("clusterID"))
+	if err != nil {
+		http.Error(w, "Invalid face group ID", http.StatusBadRequest)
+		return
+	}
+	photos, err := h.Photos.ListPhotosByFaceCluster(r.Context(), groupID, clusterID.String())
+	if err != nil {
+		http.Error(w, "Failed to fetch face group photos", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, photoResponses(photos))
+}
+
+func (h *UploadHandler) ListNoFacePhotos(w http.ResponseWriter, r *http.Request) {
+	groupID, ok := h.ownedGroup(w, r)
+	if !ok {
+		return
+	}
+	photos, err := h.Photos.ListNoFacePhotos(r.Context(), groupID)
+	if err != nil {
+		http.Error(w, "Failed to fetch photos without faces", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, photoResponses(photos))
+}
+
+func (h *UploadHandler) ListUnprocessedPhotos(w http.ResponseWriter, r *http.Request) {
+	groupID, ok := h.ownedGroup(w, r)
+	if !ok {
+		return
+	}
+	photos, err := h.Photos.ListUnprocessedPhotos(r.Context(), groupID)
+	if err != nil {
+		http.Error(w, "Failed to fetch unprocessed photos", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, photoResponses(photos))
+}
+
+func (h *UploadHandler) ownedGroup(w http.ResponseWriter, r *http.Request) (string, bool) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return "", false
+	}
+	groupID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "Invalid group ID", http.StatusBadRequest)
+		return "", false
+	}
+	owned, err := h.Groups.UserOwnsGroup(r.Context(), userID, groupID.String())
+	if err != nil {
+		http.Error(w, "Failed to verify group", http.StatusInternalServerError)
+		return "", false
+	}
+	if !owned {
+		http.NotFound(w, r)
+		return "", false
+	}
+	return groupID.String(), true
+}
+
+func photoResponses(photos []store.Photo) []groupPhotoResponse {
+	response := make([]groupPhotoResponse, 0, len(photos))
+	for _, photo := range photos {
+		response = append(response, groupPhotoResponse{
+			ID: photo.ID, GroupID: photo.GroupID, ThumbURL: photo.ThumbURL,
+			PreviewURL: photo.PreviewURL, Status: photo.Status, CreatedAt: photo.CreatedAt,
+		})
+	}
+	return response
 }
 
 func (h *UploadHandler) ListGroupPhotos(w http.ResponseWriter, r *http.Request) {

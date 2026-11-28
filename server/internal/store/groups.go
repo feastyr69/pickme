@@ -66,3 +66,11 @@ func (s *GroupStore) UserOwnsGroup(ctx context.Context, ownerID, groupID string)
 	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM groups WHERE id = $1 AND owner_id = $2)`, groupID, ownerID).Scan(&exists)
 	return exists, err
 }
+
+func (s *GroupStore) DeleteGroupForUser(ctx context.Context, ownerID, groupID string) (bool, error) {
+	result, err := s.Pool.Exec(ctx, `DELETE FROM groups WHERE id = $1 AND owner_id = $2`, groupID, ownerID)
+	if err != nil {
+		return false, fmt.Errorf("delete group: %w", err)
+	}
+	return result.RowsAffected() > 0, nil
+}
