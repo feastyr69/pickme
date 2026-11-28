@@ -53,6 +53,32 @@ func (s *PhotoStore) GetPhotoByIDForUser(ctx context.Context, id, userID string)
 	`, id, userID))
 }
 
+func (s *PhotoStore) ListPhotosByGroup(ctx context.Context, groupID string) ([]Photo, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT id, group_id, thumb_url, preview_url, original_key, status, created_at
+		FROM photos
+		WHERE group_id = $1
+		ORDER BY created_at DESC, id DESC
+	`, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("list group photos: %w", err)
+	}
+	defer rows.Close()
+
+	photos := make([]Photo, 0)
+	for rows.Next() {
+		var photo Photo
+		if err := rows.Scan(&photo.ID, &photo.GroupID, &photo.ThumbURL, &photo.PreviewURL, &photo.OriginalKey, &photo.Status, &photo.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan group photo: %w", err)
+		}
+		photos = append(photos, photo)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate group photos: %w", err)
+	}
+	return photos, nil
+}
+
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanPhoto(row rowScanner) (*Photo, error) {

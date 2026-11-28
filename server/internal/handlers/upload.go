@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/feastyr69/pickme/server/internal/middleware"
 	"github.com/feastyr69/pickme/server/internal/services"
@@ -45,6 +46,15 @@ type completeRequest struct {
 	ThumbURL    string `json:"thumb_url"`
 	PreviewURL  string `json:"preview_url"`
 	OriginalKey string `json:"original_key"`
+}
+
+type groupPhotoResponse struct {
+	ID         string    `json:"id"`
+	GroupID    string    `json:"group_id"`
+	ThumbURL   string    `json:"thumb_url"`
+	PreviewURL string    `json:"preview_url"`
+	Status     string    `json:"status"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 func (h *UploadHandler) PresignUploads(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +139,47 @@ func (h *UploadHandler) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Server is busy. Please try again later.", http.StatusServiceUnavailable)
 	}
+}
+
+func (h *UploadHandler) ListGroupPhotos(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	groupID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "Invalid group ID", http.StatusBadRequest)
+		return
+	}
+	owned, err := h.Groups.UserOwnsGroup(r.Context(), userID, groupID.String())
+	if err != nil {
+		http.Error(w, "Failed to verify group", http.StatusInternalServerError)
+		return
+	}
+	if !owned {
+		http.NotFound(w, r)
+		return
+	}
+
+	photos, err := h.Photos.ListPhotosByGroup(r.Context(), groupID.String())
+	if err != nil {
+		http.Error(w, "Failed to fetch group photos", http.StatusInternalServerError)
+		return
+	}
+
+	response := make([]groupPhotoResponse, 0, len(photos))
+	for _, photo := range photos {
+		response = append(response, groupPhotoResponse{
+			ID:         photo.ID,
+			GroupID:    photo.GroupID,
+			ThumbURL:   photo.ThumbURL,
+			PreviewURL: photo.PreviewURL,
+			Status:     photo.Status,
+			CreatedAt:  photo.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *UploadHandler) DownloadOriginal(w http.ResponseWriter, r *http.Request) {

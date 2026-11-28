@@ -61,6 +61,7 @@ func main() {
 	mux.HandleFunc("GET /health", handlers.HandleHealthCheck)
 	mux.Handle("POST /api/uploads/presign", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.PresignUploads)))
 	mux.Handle("POST /api/uploads/complete", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.CompleteUpload)))
+	mux.Handle("GET /api/groups/{id}/photos", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.ListGroupPhotos)))
 	mux.Handle("GET /api/photos/{id}/download", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.DownloadOriginal)))
 	mux.Handle("POST /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.CreateGroup)))
 	mux.Handle("GET /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroups)))
