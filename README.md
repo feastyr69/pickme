@@ -6,7 +6,7 @@
 
 pickME is designed for shared event photo groups, with photos clustered and filtered using face embeddings. The target architecture uses a free-tier cloud stack, a stateless Go API, and direct-to-storage uploads so image bytes do not pass through the API server.
 
-> **Implementation status:** The Go API supports Supabase JWT authentication, user-owned groups, direct-to-storage uploads, original downloads, asynchronous face extraction, group-scoped face clustering, and face/no-face galleries. Existing photos are kept in an Unprocessed collection; clustering applies to uploads processed after the migration.
+> **Implementation status:** The Go API supports Supabase JWT authentication, shared groups with owner-managed invite links, direct-to-storage uploads, original downloads, asynchronous face extraction, group-scoped face clustering, and face/no-face galleries. Existing photos are kept in an Unprocessed collection; clustering applies to uploads processed after the migration.
 
 ## Architecture and upload flow
 
@@ -107,9 +107,13 @@ The backend reads `DATABASE_URL`, `SUPABASE_URL`, the storage settings, and `FAC
 
 Create the public Supabase `media` bucket and configure browser CORS on both storage providers for the frontend origin. The storage credentials need permission to delete objects for group deletion. The embedding table must already exist with `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)` columns as described below. Apply `server/migrations/003_face_clusters.sql` after the `groups`, `photos`, and `face_embeddings` tables exist, then apply `server/migrations/004_face_group_search_index.sql`. Set `FACE_MATCH_THRESHOLD` between `0` and `1`; the default `0.50` may need tuning for the extractor/model and your photos.
 
+Add the frontend origin and its `/invite/*` path to Supabase Auth's allowed redirect URLs so Google sign-in can return invitees to the invitation they opened.
+
 ### Database
 
-Groups are private to their creator. The API takes the owner from the verified Supabase JWT and never accepts an owner ID from the request body.
+Groups are created by an owner. Owners can create one seven-day invite link per group; signed-in users can reuse that link to join until it expires. A new link can be created after the active one expires. Members can view, upload, and download group photos. Only the owner can delete the group or manage members. Group access is always checked against the verified Supabase JWT identity.
+
+The existing Supabase `media` bucket is public, so group membership protects API access but does not make a known thumbnail or preview URL private. Private image access would require changing the bucket and issuing signed read URLs.
 
 ```sql
 create table groups (
@@ -121,6 +125,8 @@ create table groups (
 ```
 
 Ensure the `groups` table includes the `owner_id` column before running the API.
+
+After creating the existing `groups` table, apply `server/migrations/005_group_sharing.sql` to add group membership and hashed, expiring invitation-token storage. Existing groups remain owned by their current owners and need no backfill. The corresponding `.down.sql` migration refuses to run while memberships or unexpired invitation links remain.
 
 The face worker writes one row per detected face to `face_embeddings` using `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)`. Migration `003_face_clusters.sql` adds its `cluster_id` link and creates `face_clusters`; migration `004_face_group_search_index.sql` supports exact nearest-face matching within each group. A processed photo with no embedding rows appears under **No faces**. Photos present before that migration are marked **Unprocessed** and are not automatically reprocessed. The extractor's detection score is not stored.
 
@@ -149,6 +155,12 @@ Set `FACE_EXTRACTOR_URL` to the extractor's base URL if it is not reachable at `
 | `POST` | `/api/groups` | Implemented | Create a group |
 | `GET` | `/api/groups` | Implemented | List groups |
 | `DELETE` | `/api/groups/{id}` | Implemented | Delete an owned group and its stored photos |
+| `POST` | `/api/groups/{id}/invites` | Implemented | Create the group's active owner-only invite link (reusable, expires after 7 days) |
+| `GET` | `/api/groups/{id}/invites` | Implemented | Check whether the group has an active invite link and read its expiry |
+| `GET` | `/api/groups/{id}/members` | Implemented | List the group owner and members |
+| `DELETE` | `/api/groups/{id}/members/{memberID}` | Implemented | Remove a group member (owner-only) |
+| `GET` | `/api/invites/{token}` | Implemented | View an invite link after signing in |
+| `POST` | `/api/invites/{token}/accept` | Implemented | Accept a link and join a group |
 | `POST` | `/api/uploads/presign` | Implemented | Request direct upload URLs for a group |
 | `POST` | `/api/uploads/complete` | Implemented | Save uploaded photo metadata and enqueue processing |
 | `GET` | `/api/groups/{id}/photos` | Implemented | List a group's photos |

@@ -78,7 +78,7 @@ func (h *UploadHandler) PresignUploads(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unsupported original_content_type", http.StatusUnsupportedMediaType)
 		return
 	}
-	owned, err := h.Groups.UserOwnsGroup(r.Context(), userID, req.GroupID)
+	owned, err := h.Groups.UserCanAccessGroup(r.Context(), userID, req.GroupID)
 	if err != nil {
 		http.Error(w, "Failed to verify group", http.StatusInternalServerError)
 		return
@@ -113,7 +113,7 @@ func (h *UploadHandler) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid group_id or photo_id", http.StatusBadRequest)
 		return
 	}
-	owned, err := h.Groups.UserOwnsGroup(r.Context(), userID, groupID.String())
+	owned, err := h.Groups.UserCanAccessGroup(r.Context(), userID, groupID.String())
 	if err != nil {
 		http.Error(w, "Failed to verify group", http.StatusInternalServerError)
 		return
@@ -146,7 +146,7 @@ func (h *UploadHandler) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UploadHandler) ListFaceGroups(w http.ResponseWriter, r *http.Request) {
-	groupID, ok := h.ownedGroup(w, r)
+	groupID, ok := h.accessibleGroup(w, r)
 	if !ok {
 		return
 	}
@@ -159,7 +159,7 @@ func (h *UploadHandler) ListFaceGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UploadHandler) ListFaceClusterPhotos(w http.ResponseWriter, r *http.Request) {
-	groupID, ok := h.ownedGroup(w, r)
+	groupID, ok := h.accessibleGroup(w, r)
 	if !ok {
 		return
 	}
@@ -177,7 +177,7 @@ func (h *UploadHandler) ListFaceClusterPhotos(w http.ResponseWriter, r *http.Req
 }
 
 func (h *UploadHandler) ListNoFacePhotos(w http.ResponseWriter, r *http.Request) {
-	groupID, ok := h.ownedGroup(w, r)
+	groupID, ok := h.accessibleGroup(w, r)
 	if !ok {
 		return
 	}
@@ -190,7 +190,7 @@ func (h *UploadHandler) ListNoFacePhotos(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *UploadHandler) ListUnprocessedPhotos(w http.ResponseWriter, r *http.Request) {
-	groupID, ok := h.ownedGroup(w, r)
+	groupID, ok := h.accessibleGroup(w, r)
 	if !ok {
 		return
 	}
@@ -202,7 +202,7 @@ func (h *UploadHandler) ListUnprocessedPhotos(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, photoResponses(photos))
 }
 
-func (h *UploadHandler) ownedGroup(w http.ResponseWriter, r *http.Request) (string, bool) {
+func (h *UploadHandler) accessibleGroup(w http.ResponseWriter, r *http.Request) (string, bool) {
 	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -213,7 +213,7 @@ func (h *UploadHandler) ownedGroup(w http.ResponseWriter, r *http.Request) (stri
 		http.Error(w, "Invalid group ID", http.StatusBadRequest)
 		return "", false
 	}
-	owned, err := h.Groups.UserOwnsGroup(r.Context(), userID, groupID.String())
+	owned, err := h.Groups.UserCanAccessGroup(r.Context(), userID, groupID.String())
 	if err != nil {
 		http.Error(w, "Failed to verify group", http.StatusInternalServerError)
 		return "", false
@@ -247,7 +247,7 @@ func (h *UploadHandler) ListGroupPhotos(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Invalid group ID", http.StatusBadRequest)
 		return
 	}
-	owned, err := h.Groups.UserOwnsGroup(r.Context(), userID, groupID.String())
+	owned, err := h.Groups.UserCanAccessGroup(r.Context(), userID, groupID.String())
 	if err != nil {
 		http.Error(w, "Failed to verify group", http.StatusInternalServerError)
 		return
@@ -288,7 +288,7 @@ func (h *UploadHandler) DownloadOriginal(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Invalid photo ID", http.StatusBadRequest)
 		return
 	}
-	photo, err := h.Photos.GetPhotoByIDForUser(r.Context(), photoID.String(), userID)
+	photo, err := h.Photos.GetPhotoByIDForMember(r.Context(), photoID.String(), userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return

@@ -10,9 +10,17 @@ export default function SignInPage() {
       setError("Add your Supabase URL and anon key to web/.env.local.");
       return;
     }
+    const requestedReturnTo = new URLSearchParams(location.search).get("next");
+    const returnTo =
+      requestedReturnTo?.startsWith("/") && !requestedReturnTo.startsWith("//")
+        ? requestedReturnTo
+        : "/groups";
+    const redirect = new URL(returnTo, location.origin);
+    const redirectTo =
+      redirect.origin === location.origin ? redirect.href : `${location.origin}/groups`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${location.origin}/groups` },
+      options: { redirectTo },
     });
     if (error) setError(error.message);
   }

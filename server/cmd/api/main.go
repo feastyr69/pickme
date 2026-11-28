@@ -85,6 +85,12 @@ func main() {
 	mux.Handle("DELETE /api/photos/{id}", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.DeletePhoto)))
 	mux.Handle("POST /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.CreateGroup)))
 	mux.Handle("GET /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroups)))
+	mux.Handle("POST /api/groups/{id}/invites", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.CreateGroupInvitation)))
+	mux.Handle("GET /api/groups/{id}/invites", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroupInvitations)))
+	mux.Handle("GET /api/groups/{id}/members", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroupMembers)))
+	mux.Handle("DELETE /api/groups/{id}/members/{memberID}", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.RemoveGroupMember)))
+	mux.Handle("GET /api/invites/{token}", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.GetInvitationDetails)))
+	mux.Handle("POST /api/invites/{token}/accept", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.AcceptInvitation)))
 	mux.Handle("DELETE /api/groups/{id}", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.DeleteGroup)))
 
 	server := &http.Server{

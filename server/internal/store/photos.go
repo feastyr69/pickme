@@ -92,6 +92,18 @@ func (s *PhotoStore) GetPhotoByIDForUser(ctx context.Context, id, userID string)
 	`, id, userID))
 }
 
+func (s *PhotoStore) GetPhotoByIDForMember(ctx context.Context, id, userID string) (*Photo, error) {
+	return scanPhoto(s.Pool.QueryRow(ctx, `
+		SELECT p.id, p.group_id, p.thumb_url, p.preview_url, p.original_key, p.status, p.created_at
+		FROM photos p JOIN groups g ON g.id = p.group_id
+		WHERE p.id = $1 AND (
+			g.owner_id = $2 OR EXISTS (
+				SELECT 1 FROM group_members gm WHERE gm.group_id = g.id AND gm.user_id = $2
+			)
+		)
+	`, id, userID))
+}
+
 func (s *PhotoStore) ListPhotosByGroup(ctx context.Context, groupID string) ([]Photo, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT id, group_id, thumb_url, preview_url, original_key, status, created_at

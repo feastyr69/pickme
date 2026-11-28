@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
-type Group = { id: string; name: string; created_at: string };
+type Group = { id: string; name: string; created_at: string; is_owner: boolean };
 const api = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
 export default function GroupsPage() {
@@ -107,7 +107,7 @@ export default function GroupsPage() {
               <Link className="group-card" href={`/groups/${group.id}`} key={group.id}>
                 <span className="group-mark">✳</span>
                 <h2>{group.name}</h2>
-                <p>Created {new Date(group.created_at).toLocaleDateString()}</p>
+                <p>{group.is_owner ? "Owned by you" : "Shared with you"}</p>
                 <span className="group-card-action">
                   Open group <span aria-hidden="true">→</span>
                 </span>
