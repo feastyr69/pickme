@@ -15,7 +15,6 @@ import { UploadedPhoto, uploadPhoto } from "../../../lib/uploadPhoto";
 
 type Group = { id: string; name: string; created_at: string; is_owner: boolean };
 type GroupMember = { user_id: string; email: string; is_owner: boolean };
-type GroupInvitation = { id: string; created_at: string; expires_at: string };
 type FaceGroup = {
   id: string;
   label: string;
@@ -126,12 +125,9 @@ export default function GroupGalleryPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [members, setMembers] = useState<GroupMember[]>([]);
-  const [invitations, setInvitations] = useState<GroupInvitation[]>([]);
   const [membershipError, setMembershipError] = useState("");
   const [inviteBusy, setInviteBusy] = useState(false);
   const [memberBusy, setMemberBusy] = useState("");
-  const [inviteLink, setInviteLink] = useState("");
-  const [shareInviteID, setShareInviteID] = useState("");
   const [previewDimensions, setPreviewDimensions] = useState<Record<string, [number, number]>>({});
 
   const activePhotoIDs = useMemo(
@@ -203,21 +199,17 @@ export default function GroupGalleryPage() {
         if (!currentGroup) throw new Error("This group could not be found.");
         setGroup(currentGroup);
         if (currentGroup.is_owner) {
-          const [membersResponse, invitesResponse] = await Promise.all([
-            fetch(`${api}/api/groups/${encodeURIComponent(groupId)}/members`, {
+          const membersResponse = await fetch(
+            `${api}/api/groups/${encodeURIComponent(groupId)}/members`,
+            {
               headers: { Authorization: `Bearer ${token}` },
               signal: controller.signal,
-            }),
-            fetch(`${api}/api/groups/${encodeURIComponent(groupId)}/invites`, {
-              headers: { Authorization: `Bearer ${token}` },
-              signal: controller.signal,
-            }),
-          ]);
-          if (membersResponse.ok && invitesResponse.ok) {
+            },
+          );
+          if (membersResponse.ok) {
             setMembers((await membersResponse.json()) as GroupMember[]);
-            setInvitations((await invitesResponse.json()) as GroupInvitation[]);
           } else if (!controller.signal.aborted) {
-            setMembershipError("Could not load group members and invitations.");
+            setMembershipError("Could not load group members.");
           }
         }
         await loadOverview(controller.signal);
@@ -242,30 +234,6 @@ export default function GroupGalleryPage() {
     }, 3000);
     return () => window.clearInterval(interval);
   }, [activePhotoIDs, loadOverview]);
-
-  useEffect(() => {
-    if (invitations.length === 0) return;
-    const nextExpiry = Math.min(...invitations.map((invite) => Date.parse(invite.expires_at)));
-    const timeout = window.setTimeout(
-      () => {
-        const now = Date.now();
-        const expiredIDs = new Set(
-          invitations
-            .filter((invite) => Date.parse(invite.expires_at) <= now)
-            .map((invite) => invite.id),
-        );
-        setInvitations((current) =>
-          current.filter((invite) => Date.parse(invite.expires_at) > now),
-        );
-        if (expiredIDs.has(shareInviteID)) {
-          setInviteLink("");
-          setShareInviteID("");
-        }
-      },
-      Math.max(0, nextExpiry - Date.now() + 50),
-    );
-    return () => window.clearTimeout(timeout);
-  }, [invitations, shareInviteID]);
 
   async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
@@ -377,7 +345,7 @@ export default function GroupGalleryPage() {
     }
   }
 
-  async function createInviteLink() {
+  async function copyCurrentInviteLink() {
     setInviteBusy(true);
     setMembershipError("");
     try {
@@ -385,38 +353,22 @@ export default function GroupGalleryPage() {
       const { data, error: sessionError } = await supabase.auth.getSession();
       if (sessionError) throw sessionError;
       const token = data.session?.access_token;
-      if (!token) throw new Error("Sign in before creating an invite link.");
+      if (!token) throw new Error("Sign in before copying an invite link.");
       const response = await fetch(`${api}/api/groups/${encodeURIComponent(groupId)}/invites`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!response.ok)
-        throw new Error((await response.text()) || "Could not create an invite link.");
-      const invitation = (await response.json()) as GroupInvitation & { token: string };
+      if (!response.ok) throw new Error((await response.text()) || "Could not get an invite link.");
+      const invitation = (await response.json()) as { token: string };
       const link = new URL(`/invite/${encodeURIComponent(invitation.token)}`, location.origin).href;
-      setInvitations((current) => [invitation, ...current]);
-      setInviteLink(link);
-      setShareInviteID(invitation.id);
-      try {
-        await navigator.clipboard.writeText(link);
-      } catch {
-        setMembershipError("Invite created. Copy the link shown below to share it.");
-      }
+      await navigator.clipboard.writeText(link);
+      setMembershipError("Invite link copied.");
     } catch (inviteFailure) {
       setMembershipError(
-        inviteFailure instanceof Error ? inviteFailure.message : "Could not create an invite link.",
+        inviteFailure instanceof Error ? inviteFailure.message : "Could not copy the invite link.",
       );
     } finally {
       setInviteBusy(false);
-    }
-  }
-
-  async function copyInviteLink() {
-    try {
-      await navigator.clipboard.writeText(inviteLink);
-      setMembershipError("Invite link copied.");
-    } catch {
-      setMembershipError("Could not access the clipboard. Select and copy the link manually.");
     }
   }
 
@@ -523,46 +475,15 @@ export default function GroupGalleryPage() {
                     <h2 id="members-title">Members</h2>
                     <p>Members can view, upload, and download photos. You control this group.</p>
                   </div>
-                  {invitations.length === 0 && (
-                    <button
-                      className="primary-button invite-create-button"
-                      type="button"
-                      disabled={inviteBusy}
-                      onClick={() => void createInviteLink()}
-                    >
-                      {inviteBusy ? "Creating link…" : "Create invite link"}
-                    </button>
-                  )}
+                  <button
+                    className="primary-button invite-create-button"
+                    type="button"
+                    disabled={inviteBusy}
+                    onClick={() => void copyCurrentInviteLink()}
+                  >
+                    {inviteBusy ? "Preparing invite…" : "Invite"}
+                  </button>
                 </div>
-                <p className="invite-link-note">
-                  Anyone with a link can join until it expires. Each group has one active link at a
-                  time; links expire after 7 days.
-                </p>
-                {invitations.length > 0 && (
-                  <p className="invite-link-note" role="status">
-                    An invite link is active until{" "}
-                    {new Date(invitations[0].expires_at).toLocaleString()}. You can create a new one
-                    after it expires.
-                  </p>
-                )}
-                {inviteLink && (
-                  <div className="invite-link-copy">
-                    <label htmlFor="group-invite-link">Share this link</label>
-                    <input
-                      id="group-invite-link"
-                      readOnly
-                      value={inviteLink}
-                      onFocus={(event) => event.currentTarget.select()}
-                    />
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => void copyInviteLink()}
-                    >
-                      Copy link
-                    </button>
-                  </div>
-                )}
                 {membershipError && (
                   <p className="error" role="alert">
                     {membershipError}
