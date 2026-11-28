@@ -25,7 +25,6 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system environment variables")
 	}
-
 	db, err := store.ConnectDB()
 	if err != nil {
 		log.Fatalf("Database connection failed: %v", err)
@@ -86,7 +85,6 @@ func main() {
 	mux.Handle("POST /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.CreateGroup)))
 	mux.Handle("GET /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroups)))
 	mux.Handle("POST /api/groups/{id}/invites", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.CreateGroupInvitation)))
-	mux.Handle("GET /api/groups/{id}/invites", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroupInvitations)))
 	mux.Handle("GET /api/groups/{id}/members", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroupMembers)))
 	mux.Handle("DELETE /api/groups/{id}/members/{memberID}", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.RemoveGroupMember)))
 	mux.Handle("GET /api/invites/{token}", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.GetInvitationDetails)))

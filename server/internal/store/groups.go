@@ -27,6 +27,7 @@ type GroupInvitation struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
+	Token     string    `json:"-"`
 }
 
 type InvitationDetails struct {
@@ -39,7 +40,7 @@ type GroupStore struct {
 	Pool *pgxpool.Pool
 }
 
-var ErrActiveInvitationExists = errors.New("an active invitation already exists for this group")
+var ErrLegacyInvitationTokenUnavailable = errors.New("the active invitation predates recoverable token storage")
 
 func (s *GroupStore) CreateGroup(ctx context.Context, ownerID, name string) (*Group, error) {
 
@@ -153,10 +154,10 @@ func (s *GroupStore) RemoveGroupMember(ctx context.Context, groupID, ownerID, me
 	return result.RowsAffected() > 0, nil
 }
 
-func (s *GroupStore) CreateGroupInvitation(ctx context.Context, groupID, ownerID string, tokenHash []byte, expiresAt time.Time) (*GroupInvitation, error) {
+func (s *GroupStore) GetOrCreateGroupInvitation(ctx context.Context, groupID, ownerID string, tokenHash []byte, token string, expiresAt time.Time) (*GroupInvitation, bool, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("begin group invitation: %w", err)
+		return nil, false, fmt.Errorf("begin group invitation: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -165,65 +166,51 @@ func (s *GroupStore) CreateGroupInvitation(ctx context.Context, groupID, ownerID
 		SELECT TRUE FROM groups WHERE id = $1 AND owner_id = $2 FOR UPDATE
 	`, groupID, ownerID).Scan(&groupExists)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, pgx.ErrNoRows
+		return nil, false, pgx.ErrNoRows
 	}
 	if err != nil {
-		return nil, fmt.Errorf("lock group for invitation: %w", err)
-	}
-	var activeInvitation bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM group_invitations
-			WHERE group_id = $1 AND expires_at > now()
-		)
-	`, groupID).Scan(&activeInvitation); err != nil {
-		return nil, fmt.Errorf("check active group invitation: %w", err)
-	}
-	if activeInvitation {
-		return nil, ErrActiveInvitationExists
+		return nil, false, fmt.Errorf("lock group for invitation: %w", err)
 	}
 
 	var invitation GroupInvitation
+	var storedToken *string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO group_invitations (group_id, invited_by, token_hash, expires_at)
-		SELECT g.id, g.owner_id, $3, $4
-		FROM groups g
-		WHERE g.id = $1 AND g.owner_id = $2
-		RETURNING id, created_at, expires_at
-	`, groupID, ownerID, tokenHash, expiresAt).Scan(&invitation.ID, &invitation.CreatedAt, &invitation.ExpiresAt)
-	if err != nil {
-		return nil, fmt.Errorf("create group invitation: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit group invitation: %w", err)
-	}
-	return &invitation, nil
-}
-
-func (s *GroupStore) ListGroupInvitations(ctx context.Context, groupID string) ([]GroupInvitation, error) {
-	rows, err := s.Pool.Query(ctx, `
-		SELECT id, created_at, expires_at
+		SELECT id, created_at, expires_at, token
 		FROM group_invitations
 		WHERE group_id = $1 AND expires_at > now()
 		ORDER BY created_at DESC
-	`, groupID)
-	if err != nil {
-		return nil, fmt.Errorf("list group invitations: %w", err)
-	}
-	defer rows.Close()
-
-	invitations := make([]GroupInvitation, 0)
-	for rows.Next() {
-		var invitation GroupInvitation
-		if err := rows.Scan(&invitation.ID, &invitation.CreatedAt, &invitation.ExpiresAt); err != nil {
-			return nil, fmt.Errorf("scan group invitation: %w", err)
+		LIMIT 1
+	`, groupID).Scan(&invitation.ID, &invitation.CreatedAt, &invitation.ExpiresAt, &storedToken)
+	if err == nil {
+		if storedToken != nil {
+			invitation.Token = *storedToken
 		}
-		invitations = append(invitations, invitation)
+		if err := tx.Commit(ctx); err != nil {
+			return nil, false, fmt.Errorf("commit existing group invitation: %w", err)
+		}
+		if invitation.Token == "" {
+			return &invitation, false, ErrLegacyInvitationTokenUnavailable
+		}
+		return &invitation, false, nil
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate group invitations: %w", err)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, fmt.Errorf("fetch active group invitation: %w", err)
 	}
-	return invitations, nil
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO group_invitations (group_id, invited_by, token_hash, token, expires_at)
+		SELECT g.id, g.owner_id, $3, $4, $5
+		FROM groups g
+		WHERE g.id = $1 AND g.owner_id = $2
+		RETURNING id, created_at, expires_at
+	`, groupID, ownerID, tokenHash, token, expiresAt).Scan(&invitation.ID, &invitation.CreatedAt, &invitation.ExpiresAt)
+	if err != nil {
+		return nil, false, fmt.Errorf("create group invitation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, fmt.Errorf("commit group invitation: %w", err)
+	}
+	return &invitation, true, nil
 }
 
 func (s *GroupStore) GetInvitationDetails(ctx context.Context, tokenHash []byte) (*InvitationDetails, error) {

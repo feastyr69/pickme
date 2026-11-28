@@ -111,7 +111,7 @@ Add the frontend origin and its `/invite/*` path to Supabase Auth's allowed redi
 
 ### Database
 
-Groups are created by an owner. Owners can create one seven-day invite link per group; signed-in users can reuse that link to join until it expires. A new link can be created after the active one expires. Members can view, upload, and download group photos. Only the owner can delete the group or manage members. Group access is always checked against the verified Supabase JWT identity.
+Groups are created by an owner. Owners can copy the group's current seven-day invite link at any time; the backend reuses it until expiry, then creates a new link on the next invite request. Signed-in users can reuse a link to join until it expires. Members can view, upload, and download group photos. Only the owner can delete the group or manage members. Group access is always checked against the verified Supabase JWT identity.
 
 The existing Supabase `media` bucket is public, so group membership protects API access but does not make a known thumbnail or preview URL private. Private image access would require changing the bucket and issuing signed read URLs.
 
@@ -126,7 +126,7 @@ create table groups (
 
 Ensure the `groups` table includes the `owner_id` column before running the API.
 
-After creating the existing `groups` table, apply `server/migrations/005_group_sharing.sql` to add group membership and hashed, expiring invitation-token storage. Existing groups remain owned by their current owners and need no backfill. The corresponding `.down.sql` migration refuses to run while memberships or unexpired invitation links remain.
+After creating the existing `groups` table, apply `server/migrations/005_group_sharing.sql` to add group membership and expiring invitation-token storage, then apply `server/migrations/006_recoverable_invite_tokens.sql`. The backend keeps a hash for invite validation and stores the active token in plaintext so owners can copy the same link again. Existing hash-only links remain valid until expiry but cannot be copied again. Existing groups remain owned by their current owners and need no backfill. The `005` and `006` down migrations refuse to discard active sharing data.
 
 The face worker writes one row per detected face to `face_embeddings` using `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)`. Migration `003_face_clusters.sql` adds its `cluster_id` link and creates `face_clusters`; migration `004_face_group_search_index.sql` supports exact nearest-face matching within each group. A processed photo with no embedding rows appears under **No faces**. Photos present before that migration are marked **Unprocessed** and are not automatically reprocessed. The extractor's detection score is not stored.
 
@@ -155,8 +155,7 @@ Set `FACE_EXTRACTOR_URL` to the extractor's base URL if it is not reachable at `
 | `POST` | `/api/groups` | Implemented | Create a group |
 | `GET` | `/api/groups` | Implemented | List groups |
 | `DELETE` | `/api/groups/{id}` | Implemented | Delete an owned group and its stored photos |
-| `POST` | `/api/groups/{id}/invites` | Implemented | Create the group's active owner-only invite link (reusable, expires after 7 days) |
-| `GET` | `/api/groups/{id}/invites` | Implemented | Check whether the group has an active invite link and read its expiry |
+| `POST` | `/api/groups/{id}/invites` | Implemented | Return the active owner-only invite link or create one (reusable, expires after 7 days) |
 | `GET` | `/api/groups/{id}/members` | Implemented | List the group owner and members |
 | `DELETE` | `/api/groups/{id}/members/{memberID}` | Implemented | Remove a group member (owner-only) |
 | `GET` | `/api/invites/{token}` | Implemented | View an invite link after signing in |

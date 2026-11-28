@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE group_invitations
+    ADD COLUMN IF NOT EXISTS token TEXT;
+
+COMMIT;

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -152,12 +153,17 @@ func (h *GroupHandler) CreateGroupInvitation(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Failed to create invitation", http.StatusInternalServerError)
 		return
 	}
-	token := base64.RawURLEncoding.EncodeToString(rawToken)
 	tokenHash := sha256.Sum256(rawToken)
+	token := base64.RawURLEncoding.EncodeToString(rawToken)
 	expiresAt := time.Now().UTC().Add(groupInviteLifetime)
-	invitation, err := h.Store.CreateGroupInvitation(r.Context(), groupID, userID, tokenHash[:], expiresAt)
-	if errors.Is(err, store.ErrActiveInvitationExists) {
-		http.Error(w, "An invite link is already active for this group", http.StatusConflict)
+	invitation, created, err := h.Store.GetOrCreateGroupInvitation(
+		r.Context(), groupID, userID, tokenHash[:], token, expiresAt,
+	)
+	if errors.Is(err, store.ErrLegacyInvitationTokenUnavailable) {
+		http.Error(w, fmt.Sprintf(
+			"The active invite link was created before copy support and remains valid until %s. Try again after it expires.",
+			invitation.ExpiresAt.UTC().Format(time.RFC3339),
+		), http.StatusConflict)
 		return
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -165,13 +171,17 @@ func (h *GroupHandler) CreateGroupInvitation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err != nil {
-		http.Error(w, "Failed to save invitation", http.StatusInternalServerError)
+		http.Error(w, "Failed to retrieve invitation", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusCreated, map[string]any{
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, map[string]any{
 		"id":         invitation.ID,
-		"token":      token,
+		"token":      invitation.Token,
 		"expires_at": invitation.ExpiresAt,
 	})
 }
@@ -228,33 +238,6 @@ func (h *GroupHandler) RemoveGroupMember(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *GroupHandler) ListGroupInvitations(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.UserIDFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	groupID, ok := parseGroupID(w, r)
-	if !ok {
-		return
-	}
-	owned, err := h.Store.UserOwnsGroup(r.Context(), userID, groupID)
-	if err != nil {
-		http.Error(w, "Failed to verify group", http.StatusInternalServerError)
-		return
-	}
-	if !owned {
-		http.NotFound(w, r)
-		return
-	}
-	invitations, err := h.Store.ListGroupInvitations(r.Context(), groupID)
-	if err != nil {
-		http.Error(w, "Failed to fetch invitations", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, invitations)
 }
 
 func (h *GroupHandler) GetInvitationDetails(w http.ResponseWriter, r *http.Request) {
