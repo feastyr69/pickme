@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"log"
 	"time"
 )
@@ -11,24 +12,32 @@ type ImageJob struct {
 	PreviewURL string
 }
 
-type WorkerPool struct {
-	JobQueue chan ImageJob
+type ImageProcessor interface {
+	Process(context.Context, ImageJob) error
 }
 
-func NewWorkerPool(queueSize int) *WorkerPool {
+type WorkerPool struct {
+	JobQueue  chan ImageJob
+	processor ImageProcessor
+}
+
+func NewWorkerPool(queueSize int, processor ImageProcessor) *WorkerPool {
 	return &WorkerPool{
-		JobQueue: make(chan ImageJob, queueSize), // buffered channel to hold jobs
+		JobQueue:  make(chan ImageJob, queueSize),
+		processor: processor,
 	}
 }
 
 func (wp *WorkerPool) worker(id int) {
 	for job := range wp.JobQueue {
-		log.Printf("[Worker %d] Processing photo %s for group %s from %s\n", id, job.PhotoID, job.GroupID, job.PreviewURL)
-
-		time.Sleep(2 * time.Second) // Simulate processing time
-
-		log.Printf("[Worker %d] Finished processing photo %s\n", id, job.PhotoID)
-
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		err := wp.processor.Process(ctx, job)
+		cancel()
+		if err != nil {
+			log.Printf("[Worker %d] Failed to process photo %s: %v", id, job.PhotoID, err)
+			continue
+		}
+		log.Printf("[Worker %d] Processed photo %s", id, job.PhotoID)
 	}
 }
 

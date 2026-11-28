@@ -45,7 +45,12 @@ func main() {
 
 	//worker setup
 
-	pool := services.NewWorkerPool(100)
+	faceExtractor, err := services.NewFaceExtractorClient(os.Getenv("FACE_EXTRACTOR_URL"))
+	if err != nil {
+		log.Fatalf("Face extractor setup failed: %v", err)
+	}
+	photoProcessor := &services.PhotoProcessor{Extractor: faceExtractor, Photos: photoStore}
+	pool := services.NewWorkerPool(100, photoProcessor)
 	pool.Start(5)
 
 	uploadHandler := &handlers.UploadHandler{

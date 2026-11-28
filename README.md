@@ -6,7 +6,7 @@
 
 pickME is designed for shared event photo groups, with photos clustered and filtered using face embeddings. The target architecture uses a free-tier cloud stack, a stateless Go API, and direct-to-storage uploads so image bytes do not pass through the API server.
 
-> **Implementation status:** The repository contains a Go API with Supabase JWT authentication, user-owned groups, direct-to-storage upload signing, photo metadata, and original download signing. The worker remains a processing placeholder; biometric clustering is planned.
+> **Implementation status:** The repository contains a Go API with Supabase JWT authentication, user-owned groups, direct-to-storage uploads, photo metadata, original download signing, and an asynchronous face-extraction worker that stores face embeddings in pgvector. Semantic and identity-based clustering is planned.
 
 ## Architecture and upload flow
 
@@ -19,17 +19,21 @@ sequenceDiagram
     participant B2 as Backblaze B2
     participant S as Supabase Storage
     participant W as Go worker pool
+    participant AI as Python face extractor
     participant DB as Supabase PostgreSQL + pgvector
     C->>C: Resize image to WebP thumbnail
     C->>API: Request presigned upload URLs
-    API-->>C: B2 original URL + Supabase thumbnail URL
+    API-->>C: B2 original URL + Supabase thumbnail/preview URLs
     par Direct uploads
         C->>B2: Upload full-resolution original
-        C->>S: Upload WebP thumbnail
+        C->>S: Upload WebP thumbnail and preview
     end
     C->>API: Confirm upload
     API->>W: Enqueue image processing job
-    W->>DB: Process preview (placeholder worker)
+    W->>AI: POST preview URL to /extract
+    AI->>S: Fetch preview image
+    AI-->>W: Face bounding boxes + 512-value embeddings
+    W->>DB: Store one face_embeddings row per face
 ```
 
 ## Tech stack
@@ -38,6 +42,7 @@ sequenceDiagram
 |---|---|---|
 | Backend | Go 1.22+, `net/http`, `pgx/v5`, `godotenv` | HTTP API and PostgreSQL connection pooling |
 | Async processing | Bounded Go worker pool and buffered channels | Process confirmed uploads outside request handling |
+| Face extraction | Python, FastAPI, InsightFace | Detect faces and produce normalized 512-dimensional embeddings |
 | Frontend | Next.js, TypeScript | Group and photo sharing UI; create WebP thumbnails client-side |
 | Database and auth | Supabase PostgreSQL, `pgvector`, Supabase Auth | Group data, face embeddings, and Google Sign-In (`signInWithIdToken`) |
 | Original image storage | Backblaze B2, S3-compatible presigned URLs | Store full-resolution photos |
@@ -54,7 +59,7 @@ server/
 └── internal/
     ├── handlers/               # health.go, groups.go, upload.go
     ├── middleware/             # auth.go (Supabase ES256 JWT verification)
-    ├── services/               # worker.go (placeholder image processing)
+    ├── services/               # worker.go, face_extractor.go, photo_processor.go
     ├── storage/                # clients.go (B2 and Supabase S3 presigning)
     ├── store/                  # db.go, groups.go, photos.go
     └── migrations/             # owner-groups and photos schema
@@ -89,9 +94,10 @@ B2_ENDPOINT=https://s3.<region>.backblazeb2.com
 B2_KEY_ID=<application-key-id>
 B2_APP_KEY=<application-key>
 B2_BUCKET=pickme-originals
+FACE_EXTRACTOR_URL=http://localhost:8000
 ```
 
-The backend reads `DATABASE_URL`, `SUPABASE_URL`, and the storage settings shown below. `SUPABASE_URL` is used to verify ES256 access tokens through Supabase's JWKS endpoint. URL-encode special characters in database credentials; for example, encode `@` as `%40` in `DATABASE_URL`.
+The backend reads `DATABASE_URL`, `SUPABASE_URL`, the storage settings, and `FACE_EXTRACTOR_URL`. The face extractor must be reachable by the Go backend and able to fetch the public Supabase preview URL. `SUPABASE_URL` is used to verify ES256 access tokens through Supabase's JWKS endpoint. URL-encode special characters in database credentials; for example, encode `@` as `%40` in `DATABASE_URL`.
 
 Create the public Supabase `media` bucket and configure browser CORS on both storage providers for the frontend origin. Apply `server/migrations/002_photos.sql` after the groups ownership migration.
 
@@ -110,6 +116,8 @@ create table groups (
 
 Apply `server/migrations/001_groups_owner.sql` after clearing existing groups.
 
+The face worker writes one row per detected face to the existing `face_embeddings` table using `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)`. The extractor's detection score is not stored.
+
 ### Run the backend
 
 ```sh
@@ -118,6 +126,14 @@ go run cmd/api/main.go
 ```
 
 The API listens on `:8080`. An `air` command is also possible if Air is installed and configured locally.
+
+Run the face extractor separately with its Python dependencies installed:
+
+```sh
+uvicorn main:app --app-dir ai --host 0.0.0.0 --port 8000
+```
+
+Set `FACE_EXTRACTOR_URL` to the extractor's base URL if it is not reachable at `http://localhost:8000`.
 
 ## API endpoints
 
@@ -128,6 +144,7 @@ The API listens on `:8080`. An `air` command is also possible if Air is installe
 | `GET` | `/api/groups` | Implemented | List groups |
 | `POST` | `/api/uploads/presign` | Implemented | Request direct upload URLs for a group |
 | `POST` | `/api/uploads/complete` | Implemented | Save uploaded photo metadata and enqueue processing |
+| `GET` | `/api/groups/{id}/photos` | Implemented | List a group's photos |
 | `GET` | `/api/photos/{id}/download` | Implemented | Request a temporary original download URL |
 
 ## Roadmap
@@ -137,8 +154,8 @@ The API listens on `:8080`. An `air` command is also possible if Air is installe
 - [x] Groups API
 - [x] Direct uploads for thumbnails, previews, and originals
 - [x] Owner-scoped photo downloads
-- [ ] Biometric embedding and clustering worker
+- [x] Face extraction worker and `pgvector` embedding storage
+- [ ] Semantic and identity-based face clustering
 - [ ] Supabase Google Sign-In and JWT verification middleware
 - [ ] Presigned direct uploads to Backblaze B2 and Supabase Storage
-- [ ] Face embedding worker and `pgvector` storage
 - [ ] WebSocket updates for processing and gallery changes
