@@ -305,6 +305,46 @@ func (h *UploadHandler) DownloadOriginal(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{"download_url": url})
 }
 
+func (h *UploadHandler) DeletePhoto(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	photoID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "Invalid photo ID", http.StatusBadRequest)
+		return
+	}
+	photo, err := h.Photos.GetPhotoByIDForUser(r.Context(), photoID.String(), userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Failed to fetch photo", http.StatusInternalServerError)
+		return
+	}
+	if !h.Storage.ValidOriginalKey(photo.GroupID, photo.ID, photo.OriginalKey) {
+		http.Error(w, "Photo has invalid storage metadata", http.StatusInternalServerError)
+		return
+	}
+	if err := h.Storage.DeletePhotoObjects(r.Context(), photo.GroupID, photo.ID, photo.OriginalKey); err != nil {
+		http.Error(w, "Could not remove all photo files from storage; retry deletion", http.StatusBadGateway)
+		return
+	}
+	deleted, err := h.Photos.DeletePhotoForUser(r.Context(), photo.ID, userID)
+	if err != nil {
+		http.Error(w, "Failed to delete photo", http.StatusInternalServerError)
+		return
+	}
+	if !deleted {
+		http.NotFound(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func originalExtension(contentType string) (string, bool) {
 	switch contentType {
 	case "image/jpeg":

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -22,12 +23,18 @@ type PhotoProcessor struct {
 
 func (p *PhotoProcessor) Process(ctx context.Context, job ImageJob) error {
 	if err := p.Photos.SetPhotoStatus(ctx, job.PhotoID, store.PhotoStatusProcessing); err != nil {
+		if errors.Is(err, store.ErrPhotoNotFound) {
+			return nil
+		}
 		return fmt.Errorf("mark photo %s processing: %w", job.PhotoID, err)
 	}
 	if err := p.process(ctx, job); err != nil {
 		statusCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if statusErr := p.Photos.SetPhotoStatus(statusCtx, job.PhotoID, store.PhotoStatusFailed); statusErr != nil {
+			if errors.Is(statusErr, store.ErrPhotoNotFound) {
+				return nil
+			}
 			return fmt.Errorf("%w (also failed to mark photo failed: %v)", err, statusErr)
 		}
 		return err

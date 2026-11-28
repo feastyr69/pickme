@@ -82,6 +82,7 @@ func main() {
 	mux.Handle("GET /api/groups/{id}/no-face-photos", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.ListNoFacePhotos)))
 	mux.Handle("GET /api/groups/{id}/unprocessed-photos", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.ListUnprocessedPhotos)))
 	mux.Handle("GET /api/photos/{id}/download", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.DownloadOriginal)))
+	mux.Handle("DELETE /api/photos/{id}", jwtVerifier.Middleware(http.HandlerFunc(uploadHandler.DeletePhoto)))
 	mux.Handle("POST /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.CreateGroup)))
 	mux.Handle("GET /api/groups", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.ListGroups)))
 	mux.Handle("DELETE /api/groups/{id}", jwtVerifier.Middleware(http.HandlerFunc(groupHandler.DeleteGroup)))

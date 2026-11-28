@@ -26,6 +26,10 @@ export default function CollectionGalleryPage() {
   const [error, setError] = useState("");
   const [downloadError, setDownloadError] = useState("");
   const [downloading, setDownloading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const downloadButtonRef = useRef<HTMLButtonElement>(null);
+  const deleteButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(
@@ -97,8 +101,16 @@ export default function CollectionGalleryPage() {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") setActivePhoto(null);
       if (event.key === "Tab") {
-        event.preventDefault();
-        closeButtonRef.current?.focus();
+        const buttons = [downloadButtonRef.current, deleteButtonRef.current, closeButtonRef.current]
+          .filter((button): button is HTMLButtonElement => button !== null && !button.disabled);
+        const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        if (event.shiftKey && currentIndex <= 0) {
+          event.preventDefault();
+          buttons[buttons.length - 1]?.focus();
+        } else if (!event.shiftKey && currentIndex === buttons.length - 1) {
+          event.preventDefault();
+          buttons[0]?.focus();
+        }
       }
     }
     window.addEventListener("keydown", handleKeyDown);
@@ -131,6 +143,34 @@ export default function CollectionGalleryPage() {
       );
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function deletePhoto(photo: Photo) {
+    if (!window.confirm("Delete this photo permanently? This cannot be undone.")) return;
+
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      const { data, error: sessionError } = await supabase!.auth.getSession();
+      if (sessionError) throw sessionError;
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Sign in to delete this photo.");
+      const response = await fetch(`${api}/api/photos/${encodeURIComponent(photo.id)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok)
+        throw new Error((await response.text()) || "Could not delete this photo.");
+
+      setPhotos((current) => current.filter((item) => item.id !== photo.id));
+      setActivePhoto(null);
+    } catch (failure) {
+      setDeleteError(
+        failure instanceof Error ? failure.message : "Could not delete this photo.",
+      );
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -221,6 +261,7 @@ export default function CollectionGalleryPage() {
             role="dialog"
             aria-modal="true"
             aria-label="Photo preview"
+            aria-busy={deleting}
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="lightbox-toolbar">
@@ -231,23 +272,39 @@ export default function CollectionGalleryPage() {
               </p>
               <div className="lightbox-actions">
                 <button
+                  ref={downloadButtonRef}
                   className="download-button"
                   type="button"
-                  disabled={downloading}
+                  disabled={downloading || deleting}
                   onClick={() => void downloadOriginal(activePhoto)}
                 >
                   {downloading ? "Preparing…" : "Download original"}
                 </button>
                 <button
+                  ref={deleteButtonRef}
+                  className="photo-delete-button"
+                  type="button"
+                  disabled={downloading || deleting}
+                  onClick={() => void deletePhoto(activePhoto)}
+                >
+                  {deleting ? "Deleting…" : "Delete photo"}
+                </button>
+                <button
                   ref={closeButtonRef}
                   className="lightbox-close"
                   type="button"
+                  disabled={deleting}
                   onClick={() => setActivePhoto(null)}
                 >
                   Close <span aria-hidden="true">×</span>
                 </button>
               </div>
             </div>
+            {deleteError && (
+              <p className="processing-error" role="alert">
+                {deleteError}
+              </p>
+            )}
             <img
               className="lightbox-image"
               src={activePhoto.preview_url}

@@ -12,6 +12,8 @@ import (
 	pgvector "github.com/pgvector/pgvector-go"
 )
 
+var ErrPhotoNotFound = errors.New("photo not found")
+
 const (
 	PhotoStatusPending     = "pending"
 	PhotoStatusProcessing  = "processing"
@@ -117,11 +119,47 @@ func (s *PhotoStore) ListPhotosByGroup(ctx context.Context, groupID string) ([]P
 }
 
 func (s *PhotoStore) SetPhotoStatus(ctx context.Context, photoID, status string) error {
-	_, err := s.Pool.Exec(ctx, `UPDATE photos SET status = $2 WHERE id = $1`, photoID, status)
+	result, err := s.Pool.Exec(ctx, `UPDATE photos SET status = $2 WHERE id = $1`, photoID, status)
 	if err != nil {
 		return fmt.Errorf("update photo status: %w", err)
 	}
+	if result.RowsAffected() == 0 {
+		return ErrPhotoNotFound
+	}
 	return nil
+}
+
+func (s *PhotoStore) DeletePhotoForUser(ctx context.Context, photoID, userID string) (bool, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin photo deletion: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var groupID string
+	err = tx.QueryRow(ctx, `
+		DELETE FROM photos p
+		USING groups g
+		WHERE p.id = $1 AND p.group_id = g.id AND g.owner_id = $2
+		RETURNING p.group_id
+	`, photoID, userID).Scan(&groupID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("delete photo: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM face_clusters fc
+		WHERE fc.group_id = $1
+			AND NOT EXISTS (SELECT 1 FROM face_embeddings fe WHERE fe.cluster_id = fc.id)
+	`, groupID); err != nil {
+		return false, fmt.Errorf("remove empty face clusters: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit photo deletion: %w", err)
+	}
+	return true, nil
 }
 
 func (s *PhotoStore) FaceGroupOverview(ctx context.Context, groupID string) (*FaceGroupOverview, error) {
