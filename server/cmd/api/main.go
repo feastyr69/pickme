@@ -52,7 +52,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Face extractor setup failed: %v", err)
 	}
-	faceMatchThreshold := 0.55
+	faceMatchThreshold := 0.50
 	if configuredThreshold := strings.TrimSpace(os.Getenv("FACE_MATCH_THRESHOLD")); configuredThreshold != "" {
 		faceMatchThreshold, err = strconv.ParseFloat(configuredThreshold, 64)
 		if err != nil || math.IsNaN(faceMatchThreshold) || math.IsInf(faceMatchThreshold, 0) || faceMatchThreshold <= 0 || faceMatchThreshold > 1 {

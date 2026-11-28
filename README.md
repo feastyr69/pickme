@@ -60,7 +60,8 @@ server/
 ├── cmd/
 │   └── api/main.go             # Entry point, dependency setup, route registration
 ├── migrations/
-│   └── 003_face_clusters.sql   # Cluster table, embedding link, processing indexes
+│   ├── 003_face_clusters.sql   # Cluster table and embedding link
+│   └── 004_face_group_search_index.sql # Exact group-scoped face matching
 └── internal/
     ├── handlers/               # health.go, groups.go, upload.go
     ├── middleware/             # auth.go (Supabase ES256 JWT verification)
@@ -99,12 +100,12 @@ B2_KEY_ID=<application-key-id>
 B2_APP_KEY=<application-key>
 B2_BUCKET=pickme-originals
 FACE_EXTRACTOR_URL=http://localhost:8000
-FACE_MATCH_THRESHOLD=0.55
+FACE_MATCH_THRESHOLD=0.50
 ```
 
 The backend reads `DATABASE_URL`, `SUPABASE_URL`, the storage settings, and `FACE_EXTRACTOR_URL`. The face extractor must be reachable by the Go backend and able to fetch the public Supabase preview URL. `SUPABASE_URL` is used to verify ES256 access tokens through Supabase's JWKS endpoint. URL-encode special characters in database credentials; for example, encode `@` as `%40` in `DATABASE_URL`.
 
-Create the public Supabase `media` bucket and configure browser CORS on both storage providers for the frontend origin. The storage credentials need permission to delete objects for group deletion. The embedding table must already exist with `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)` columns as described below. Apply `server/migrations/003_face_clusters.sql` after the `groups`, `photos`, and `face_embeddings` tables exist. Set `FACE_MATCH_THRESHOLD` between `0` and `1`; the default `0.55` is intentionally conservative and may need tuning for the extractor/model and your photos.
+Create the public Supabase `media` bucket and configure browser CORS on both storage providers for the frontend origin. The storage credentials need permission to delete objects for group deletion. The embedding table must already exist with `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)` columns as described below. Apply `server/migrations/003_face_clusters.sql` after the `groups`, `photos`, and `face_embeddings` tables exist, then apply `server/migrations/004_face_group_search_index.sql`. Set `FACE_MATCH_THRESHOLD` between `0` and `1`; the default `0.50` may need tuning for the extractor/model and your photos.
 
 ### Database
 
@@ -121,7 +122,7 @@ create table groups (
 
 Ensure the `groups` table includes the `owner_id` column before running the API.
 
-The face worker writes one row per detected face to `face_embeddings` using `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)`. Migration `003_face_clusters.sql` adds its `cluster_id` link and creates `face_clusters`. A processed photo with no embedding rows appears under **No faces**. Photos present before that migration are marked **Unprocessed** and are not automatically reprocessed. The extractor's detection score is not stored.
+The face worker writes one row per detected face to `face_embeddings` using `photo_id`, `group_id`, `bbox integer[]`, and `embedding vector(512)`. Migration `003_face_clusters.sql` adds its `cluster_id` link and creates `face_clusters`; migration `004_face_group_search_index.sql` supports exact nearest-face matching within each group. A processed photo with no embedding rows appears under **No faces**. Photos present before that migration are marked **Unprocessed** and are not automatically reprocessed. The extractor's detection score is not stored.
 
 ### Run the backend
 

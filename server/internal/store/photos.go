@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -284,7 +285,7 @@ func (s *PhotoStore) ReplaceFaceEmbeddings(ctx context.Context, photoID, groupID
 	`, groupID); err != nil {
 		return fmt.Errorf("remove empty face clusters: %w", err)
 	}
-	for _, face := range faces {
+	for faceIndex, face := range faces {
 		if len(face.BBox) != 4 || len(face.Embedding) != 512 {
 			return fmt.Errorf("invalid face embedding shape: bbox=%d embedding=%d", len(face.BBox), len(face.Embedding))
 		}
@@ -295,13 +296,18 @@ func (s *PhotoStore) ReplaceFaceEmbeddings(ctx context.Context, photoID, groupID
 			SELECT cluster_id, 1 - (embedding <=> $1) AS similarity
 			FROM face_embeddings
 			WHERE group_id = $2 AND cluster_id IS NOT NULL
-			ORDER BY embedding <=> $1
+			ORDER BY similarity DESC
 			LIMIT 1
 		`, vector, groupID).Scan(&clusterID, &similarity)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("find matching face cluster: %w", err)
 		}
 		if errors.Is(err, pgx.ErrNoRows) || similarity < threshold {
+			if errors.Is(err, pgx.ErrNoRows) {
+				log.Printf("[FaceMatcher] new cluster: group_id=%s photo_id=%s face_index=%d nearest_similarity=none threshold=%.3f", groupID, photoID, faceIndex, threshold)
+			} else {
+				log.Printf("[FaceMatcher] new cluster: group_id=%s photo_id=%s face_index=%d nearest_similarity=%.4f threshold=%.3f", groupID, photoID, faceIndex, similarity, threshold)
+			}
 			if err := tx.QueryRow(ctx, `INSERT INTO face_clusters (group_id) VALUES ($1) RETURNING id`, groupID).Scan(&clusterID); err != nil {
 				return fmt.Errorf("create face cluster: %w", err)
 			}
