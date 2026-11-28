@@ -13,6 +13,7 @@ type Photo = {
   status: string;
   created_at: string;
 };
+type GroupAccess = { id: string; is_owner: boolean };
 
 const api = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
@@ -28,6 +29,7 @@ export default function CollectionGalleryPage() {
   const [downloading, setDownloading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [isOwner, setIsOwner] = useState(false);
   const downloadButtonRef = useRef<HTMLButtonElement>(null);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -48,12 +50,21 @@ export default function CollectionGalleryPage() {
           : collectionId === "unprocessed"
             ? "unprocessed-photos"
             : `face-groups/${encodeURIComponent(collectionId)}/photos`;
-      const response = await fetch(`${api}/api/groups/${encodeURIComponent(groupId)}/${suffix}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal,
-      });
+      const [response, groupsResponse] = await Promise.all([
+        fetch(`${api}/api/groups/${encodeURIComponent(groupId)}/${suffix}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal,
+        }),
+        fetch(`${api}/api/groups`, { headers: { Authorization: `Bearer ${token}` }, signal }),
+      ]);
       if (!response.ok)
         throw new Error((await response.text()) || "Could not load this collection.");
+      if (!groupsResponse.ok)
+        throw new Error((await groupsResponse.text()) || "Could not verify group access.");
+      const groups = (await groupsResponse.json()) as GroupAccess[];
+      const currentGroup = groups.find((group) => group.id === groupId);
+      if (!currentGroup) throw new Error("This group could not be found.");
+      setIsOwner(currentGroup.is_owner);
       const results = (await response.json()) as Photo[];
       setPhotos(results);
       if (collectionId === "no-faces") setTitle("No faces");
@@ -101,8 +112,11 @@ export default function CollectionGalleryPage() {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") setActivePhoto(null);
       if (event.key === "Tab") {
-        const buttons = [downloadButtonRef.current, deleteButtonRef.current, closeButtonRef.current]
-          .filter((button): button is HTMLButtonElement => button !== null && !button.disabled);
+        const buttons = [
+          downloadButtonRef.current,
+          deleteButtonRef.current,
+          closeButtonRef.current,
+        ].filter((button): button is HTMLButtonElement => button !== null && !button.disabled);
         const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
         if (event.shiftKey && currentIndex <= 0) {
           event.preventDefault();
@@ -160,15 +174,12 @@ export default function CollectionGalleryPage() {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!response.ok)
-        throw new Error((await response.text()) || "Could not delete this photo.");
+      if (!response.ok) throw new Error((await response.text()) || "Could not delete this photo.");
 
       setPhotos((current) => current.filter((item) => item.id !== photo.id));
       setActivePhoto(null);
     } catch (failure) {
-      setDeleteError(
-        failure instanceof Error ? failure.message : "Could not delete this photo.",
-      );
+      setDeleteError(failure instanceof Error ? failure.message : "Could not delete this photo.");
     } finally {
       setDeleting(false);
     }
@@ -280,15 +291,17 @@ export default function CollectionGalleryPage() {
                 >
                   {downloading ? "Preparing…" : "Download original"}
                 </button>
-                <button
-                  ref={deleteButtonRef}
-                  className="photo-delete-button"
-                  type="button"
-                  disabled={downloading || deleting}
-                  onClick={() => void deletePhoto(activePhoto)}
-                >
-                  {deleting ? "Deleting…" : "Delete photo"}
-                </button>
+                {isOwner && (
+                  <button
+                    ref={deleteButtonRef}
+                    className="photo-delete-button"
+                    type="button"
+                    disabled={downloading || deleting}
+                    onClick={() => void deletePhoto(activePhoto)}
+                  >
+                    {deleting ? "Deleting…" : "Delete photo"}
+                  </button>
+                )}
                 <button
                   ref={closeButtonRef}
                   className="lightbox-close"

@@ -1,12 +1,21 @@
 "use client";
 
-import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type ChangeEvent,
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
 import { UploadedPhoto, uploadPhoto } from "../../../lib/uploadPhoto";
 
-type Group = { id: string; name: string; created_at: string };
+type Group = { id: string; name: string; created_at: string; is_owner: boolean };
+type GroupMember = { user_id: string; email: string; is_owner: boolean };
+type GroupInvitation = { id: string; created_at: string; expires_at: string };
 type FaceGroup = {
   id: string;
   label: string;
@@ -45,12 +54,7 @@ function getFaceCoverStyle(
   imageWidth: number,
   imageHeight: number,
 ): CSSProperties | undefined {
-  if (
-    bbox.length !== 4 ||
-    !bbox.every(Number.isFinite) ||
-    imageWidth <= 0 ||
-    imageHeight <= 0
-  ) {
+  if (bbox.length !== 4 || !bbox.every(Number.isFinite) || imageWidth <= 0 || imageHeight <= 0) {
     return undefined;
   }
 
@@ -70,7 +74,10 @@ function getFaceCoverStyle(
     minFaceCoverZoom,
     Math.min(
       maxFaceCoverZoom,
-      Math.min(targetFaceWidth * 100 / faceWidthPercent, targetFaceHeight * 100 / faceHeightPercent),
+      Math.min(
+        (targetFaceWidth * 100) / faceWidthPercent,
+        (targetFaceHeight * 100) / faceHeightPercent,
+      ),
     ),
   );
   const renderedWidthPercent = baseWidthPercent * zoom;
@@ -118,6 +125,13 @@ export default function GroupGalleryPage() {
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [members, setMembers] = useState<GroupMember[]>([]);
+  const [invitations, setInvitations] = useState<GroupInvitation[]>([]);
+  const [membershipError, setMembershipError] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [memberBusy, setMemberBusy] = useState("");
+  const [inviteLink, setInviteLink] = useState("");
+  const [shareInviteID, setShareInviteID] = useState("");
   const [previewDimensions, setPreviewDimensions] = useState<Record<string, [number, number]>>({});
 
   const activePhotoIDs = useMemo(
@@ -188,6 +202,24 @@ export default function GroupGalleryPage() {
         const currentGroup = groups.find((item) => item.id === groupId);
         if (!currentGroup) throw new Error("This group could not be found.");
         setGroup(currentGroup);
+        if (currentGroup.is_owner) {
+          const [membersResponse, invitesResponse] = await Promise.all([
+            fetch(`${api}/api/groups/${encodeURIComponent(groupId)}/members`, {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: controller.signal,
+            }),
+            fetch(`${api}/api/groups/${encodeURIComponent(groupId)}/invites`, {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: controller.signal,
+            }),
+          ]);
+          if (membersResponse.ok && invitesResponse.ok) {
+            setMembers((await membersResponse.json()) as GroupMember[]);
+            setInvitations((await invitesResponse.json()) as GroupInvitation[]);
+          } else if (!controller.signal.aborted) {
+            setMembershipError("Could not load group members and invitations.");
+          }
+        }
         await loadOverview(controller.signal);
       } catch (loadError) {
         if (!controller.signal.aborted) {
@@ -210,6 +242,30 @@ export default function GroupGalleryPage() {
     }, 3000);
     return () => window.clearInterval(interval);
   }, [activePhotoIDs, loadOverview]);
+
+  useEffect(() => {
+    if (invitations.length === 0) return;
+    const nextExpiry = Math.min(...invitations.map((invite) => Date.parse(invite.expires_at)));
+    const timeout = window.setTimeout(
+      () => {
+        const now = Date.now();
+        const expiredIDs = new Set(
+          invitations
+            .filter((invite) => Date.parse(invite.expires_at) <= now)
+            .map((invite) => invite.id),
+        );
+        setInvitations((current) =>
+          current.filter((invite) => Date.parse(invite.expires_at) > now),
+        );
+        if (expiredIDs.has(shareInviteID)) {
+          setInviteLink("");
+          setShareInviteID("");
+        }
+      },
+      Math.max(0, nextExpiry - Date.now() + 50),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [invitations, shareInviteID]);
 
   async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
@@ -321,6 +377,73 @@ export default function GroupGalleryPage() {
     }
   }
 
+  async function createInviteLink() {
+    setInviteBusy(true);
+    setMembershipError("");
+    try {
+      if (!supabase) throw new Error("Supabase is not configured.");
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Sign in before creating an invite link.");
+      const response = await fetch(`${api}/api/groups/${encodeURIComponent(groupId)}/invites`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok)
+        throw new Error((await response.text()) || "Could not create an invite link.");
+      const invitation = (await response.json()) as GroupInvitation & { token: string };
+      const link = new URL(`/invite/${encodeURIComponent(invitation.token)}`, location.origin).href;
+      setInvitations((current) => [invitation, ...current]);
+      setInviteLink(link);
+      setShareInviteID(invitation.id);
+      try {
+        await navigator.clipboard.writeText(link);
+      } catch {
+        setMembershipError("Invite created. Copy the link shown below to share it.");
+      }
+    } catch (inviteFailure) {
+      setMembershipError(
+        inviteFailure instanceof Error ? inviteFailure.message : "Could not create an invite link.",
+      );
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  async function copyInviteLink() {
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      setMembershipError("Invite link copied.");
+    } catch {
+      setMembershipError("Could not access the clipboard. Select and copy the link manually.");
+    }
+  }
+
+  async function removeMember(member: GroupMember) {
+    if (!window.confirm(`Remove ${member.email || "this member"} from the group?`)) return;
+    setMemberBusy(member.user_id);
+    setMembershipError("");
+    try {
+      const { data, error: sessionError } = await supabase!.auth.getSession();
+      if (sessionError) throw sessionError;
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Sign in before managing group members.");
+      const response = await fetch(
+        `${api}/api/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(member.user_id)}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!response.ok) throw new Error((await response.text()) || "Could not remove member.");
+      setMembers((current) => current.filter((item) => item.user_id !== member.user_id));
+    } catch (removeFailure) {
+      setMembershipError(
+        removeFailure instanceof Error ? removeFailure.message : "Could not remove member.",
+      );
+    } finally {
+      setMemberBusy("");
+    }
+  }
+
   const totalPhotos = overview.photo_count;
   const processingCount = activePhotoIDs.size;
 
@@ -379,16 +502,93 @@ export default function GroupGalleryPage() {
                   {uploading ? "Uploading photos…" : "Add photos"}
                 </label>
                 <p>JPEG, PNG, or WebP · up to 10 MB each</p>
-                <button
-                  className="danger-button"
-                  type="button"
-                  disabled={deleting || uploading}
-                  onClick={() => void deleteGroup()}
-                >
-                  {deleting ? "Deleting group…" : "Delete group"}
-                </button>
+                {group.is_owner && (
+                  <button
+                    className="danger-button"
+                    type="button"
+                    disabled={deleting || uploading}
+                    onClick={() => void deleteGroup()}
+                  >
+                    {deleting ? "Deleting group…" : "Delete group"}
+                  </button>
+                )}
               </div>
             </div>
+
+            {group.is_owner && (
+              <section className="member-management" aria-labelledby="members-title">
+                <div className="member-management-heading">
+                  <div>
+                    <p className="eyebrow">GROUP ACCESS</p>
+                    <h2 id="members-title">Members</h2>
+                    <p>Members can view, upload, and download photos. You control this group.</p>
+                  </div>
+                  {invitations.length === 0 && (
+                    <button
+                      className="primary-button invite-create-button"
+                      type="button"
+                      disabled={inviteBusy}
+                      onClick={() => void createInviteLink()}
+                    >
+                      {inviteBusy ? "Creating link…" : "Create invite link"}
+                    </button>
+                  )}
+                </div>
+                <p className="invite-link-note">
+                  Anyone with a link can join until it expires. Each group has one active link at a
+                  time; links expire after 7 days.
+                </p>
+                {invitations.length > 0 && (
+                  <p className="invite-link-note" role="status">
+                    An invite link is active until{" "}
+                    {new Date(invitations[0].expires_at).toLocaleString()}. You can create a new one
+                    after it expires.
+                  </p>
+                )}
+                {inviteLink && (
+                  <div className="invite-link-copy">
+                    <label htmlFor="group-invite-link">Share this link</label>
+                    <input
+                      id="group-invite-link"
+                      readOnly
+                      value={inviteLink}
+                      onFocus={(event) => event.currentTarget.select()}
+                    />
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => void copyInviteLink()}
+                    >
+                      Copy link
+                    </button>
+                  </div>
+                )}
+                {membershipError && (
+                  <p className="error" role="alert">
+                    {membershipError}
+                  </p>
+                )}
+                <ul className="member-list" aria-label="Group members">
+                  {members.map((member) => (
+                    <li key={member.user_id}>
+                      <span>{member.email || "Member"}</span>
+                      {member.is_owner ? (
+                        <span className="member-role">Owner</span>
+                      ) : (
+                        <button
+                          className="member-remove-button"
+                          type="button"
+                          disabled={memberBusy === member.user_id}
+                          onClick={() => void removeMember(member)}
+                        >
+                          {memberBusy === member.user_id ? "Removing…" : "Remove"}
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
             {deleteError && (
               <p className="error" role="alert">
