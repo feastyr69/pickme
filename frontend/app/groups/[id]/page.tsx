@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
@@ -34,6 +34,68 @@ type UploadItem = {
 const api = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const maxFileSize = 10 * 1024 * 1024;
+const faceCoverAspectRatio = 1.28;
+const targetFaceWidth = 0.62;
+const targetFaceHeight = 0.7;
+const minFaceCoverZoom = 1;
+const maxFaceCoverZoom = 4;
+
+function getFaceCoverStyle(
+  bbox: number[],
+  imageWidth: number,
+  imageHeight: number,
+): CSSProperties | undefined {
+  if (
+    bbox.length !== 4 ||
+    !bbox.every(Number.isFinite) ||
+    imageWidth <= 0 ||
+    imageHeight <= 0
+  ) {
+    return undefined;
+  }
+
+  const [rawX1, rawY1, rawX2, rawY2] = bbox;
+  const x1 = Math.max(0, Math.min(imageWidth, rawX1));
+  const y1 = Math.max(0, Math.min(imageHeight, rawY1));
+  const x2 = Math.max(0, Math.min(imageWidth, rawX2));
+  const y2 = Math.max(0, Math.min(imageHeight, rawY2));
+  if (x2 <= x1 || y2 <= y1) return undefined;
+
+  const imageAspectRatio = imageWidth / imageHeight;
+  const baseWidthPercent = Math.max(1, imageAspectRatio / faceCoverAspectRatio) * 100;
+  const baseHeightPercent = Math.max(1, faceCoverAspectRatio / imageAspectRatio) * 100;
+  const faceWidthPercent = ((x2 - x1) / imageWidth) * baseWidthPercent;
+  const faceHeightPercent = ((y2 - y1) / imageHeight) * baseHeightPercent;
+  const zoom = Math.max(
+    minFaceCoverZoom,
+    Math.min(
+      maxFaceCoverZoom,
+      Math.min(targetFaceWidth * 100 / faceWidthPercent, targetFaceHeight * 100 / faceHeightPercent),
+    ),
+  );
+  const renderedWidthPercent = baseWidthPercent * zoom;
+  const renderedHeightPercent = baseHeightPercent * zoom;
+  const centerX = (x1 + x2) / 2;
+  const centerY = (y1 + y2) / 2;
+  const leftPercent = Math.max(
+    100 - renderedWidthPercent,
+    Math.min(0, 50 - (centerX / imageWidth) * renderedWidthPercent),
+  );
+  const topPercent = Math.max(
+    100 - renderedHeightPercent,
+    Math.min(0, 50 - (centerY / imageHeight) * renderedHeightPercent),
+  );
+
+  return {
+    width: `${renderedWidthPercent}%`,
+    height: `${renderedHeightPercent}%`,
+    left: `${leftPercent}%`,
+    top: `${topPercent}%`,
+    objectFit: "fill",
+    transform: "none",
+  };
+}
+
 const emptyOverview: Overview = {
   face_groups: [],
   photo_count: 0,
@@ -357,12 +419,8 @@ export default function GroupGalleryPage() {
 
             <div className="collection-grid" aria-label="Photo collections">
               {overview.face_groups.map((face) => {
-                const [x1 = 0, y1 = 0, x2 = 0, y2 = 0] = face.bbox;
                 const [width = 0, height = 0] = previewDimensions[face.id] ?? [];
-                const x =
-                  width > 0 ? Math.max(0, Math.min(100, ((x1 + x2) / 2 / width) * 100)) : 50;
-                const y =
-                  height > 0 ? Math.max(0, Math.min(100, ((y1 + y2) / 2 / height) * 100)) : 50;
+                const imageStyle = getFaceCoverStyle(face.bbox, width, height);
                 return (
                   <Link
                     className="collection-card"
@@ -381,7 +439,7 @@ export default function GroupGalleryPage() {
                             [face.id]: [naturalWidth, naturalHeight],
                           }));
                         }}
-                        style={{ objectPosition: `${x}% ${y}%` }}
+                        style={imageStyle}
                       />
                       <span className="collection-badge">{face.photo_count}</span>
                     </div>

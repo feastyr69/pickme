@@ -35,7 +35,7 @@ export async function uploadPhoto(file: File, groupId: string): Promise<Uploaded
   if (sessionError) throw sessionError;
   if (!session?.access_token) throw new Error("Sign in before uploading photos");
   const headers = { Authorization: `Bearer ${session.access_token}` };
-  const [thumb, preview] = await Promise.all([toWebP(file, 400, 0.75), toWebP(file, 1200, 0.85)]);
+  const [thumb, preview] = await Promise.all([toWebP(file, 400, 0.75), toWebP(file, 1600, 0.9)]);
 
   const presignResponse = await fetch(`${api}/api/uploads/presign`, {
     method: "POST",

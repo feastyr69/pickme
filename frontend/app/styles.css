@@ -56,7 +56,7 @@
 .collection-card{overflow:hidden;border:1px solid var(--line);border-radius:18px;background:#fff;color:inherit;text-decoration:none;transition:transform .18s,border-color .18s,box-shadow .18s}
 .collection-card:hover{transform:translateY(-2px);border-color:#a9c1ad;box-shadow:0 12px 28px #19332a12}
 .collection-cover{position:relative;display:grid;place-items:center;overflow:hidden;aspect-ratio:1.28;background:#e8eee6}
-.collection-cover img{width:100%;height:100%;object-fit:cover;transform:scale(1.5)}
+.collection-cover img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;transform:scale(1.5)}
 .no-face-cover{background:linear-gradient(135deg,#e5d9c6,#c7d9cb);color:#426a51;font-size:4rem;font-weight:300}
 .unprocessed-cover{background:linear-gradient(135deg,#d8e3e5,#b4c1b4);color:#426a51;font:500 5rem 'Manrope',sans-serif}
 .collection-badge{position:absolute;right:12px;top:12px;display:grid;min-width:34px;height:34px;place-items:center;padding:0 9px;border:1px solid #ffffff8c;border-radius:18px;background:#19332acc;color:#fff;font-size:.8rem;font-weight:700}

@@ -293,12 +293,19 @@ func (s *PhotoStore) ReplaceFaceEmbeddings(ctx context.Context, photoID, groupID
 		var clusterID string
 		var similarity float64
 		err := tx.QueryRow(ctx, `
-			SELECT cluster_id, 1 - (embedding <=> $1) AS similarity
-			FROM face_embeddings
-			WHERE group_id = $2 AND cluster_id IS NOT NULL
+			SELECT candidate.cluster_id, 1 - (candidate.embedding <=> $1) AS similarity
+			FROM face_embeddings candidate
+			WHERE candidate.group_id = $2
+				AND candidate.cluster_id IS NOT NULL
+				AND NOT EXISTS (
+					SELECT 1
+					FROM face_embeddings same_photo
+					WHERE same_photo.cluster_id = candidate.cluster_id
+						AND same_photo.photo_id = $3
+				)
 			ORDER BY similarity DESC
 			LIMIT 1
-		`, vector, groupID).Scan(&clusterID, &similarity)
+		`, vector, groupID, photoID).Scan(&clusterID, &similarity)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("find matching face cluster: %w", err)
 		}
